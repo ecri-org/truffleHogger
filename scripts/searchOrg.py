@@ -3,7 +3,7 @@ Credit for this code goes to https://github.com/ryanbaxendale
 via https://github.com/dxa4481/truffleHog/pull/9
 """
 import requests
-from truffleHog import truffleHog
+from truffleHogger import truffleHogger
 import re
 from json import loads, dumps
 
@@ -29,8 +29,10 @@ rules = {
     "SlackInternal": "slack-corp",
 }
 
+
 for key in rules:
     rules[key] = re.compile(rules[key])
+
 
 def get_org_repos(orgname, page):
     response = requests.get(url='https://api.github.com/users/' + orgname + '/repos?page={}'.format(page))
@@ -41,7 +43,7 @@ def get_org_repos(orgname, page):
 
         if item['fork'] == False:
             print('searching ' + item["html_url"])
-            results = truffleHog.find_strings(item["html_url"], do_regex=True, custom_regexes=rules, do_entropy=False, max_depth=100000)
+            results = truffleHogger.find_strings(item["html_url"], do_regex=True, custom_regexes=rules, do_entropy=False, max_depth=100000)
             for issue in results["foundIssues"]:
                 d = loads(open(issue).read())
                 d['github_url'] = "{}/blob/{}/{}".format(item["html_url"], d['commitHash'], d['path'])
@@ -50,4 +52,6 @@ def get_org_repos(orgname, page):
                 d['printDiff'] = d['printDiff'][0:200]
                 print(dumps(d, indent=4))
     get_org_repos(orgname, page + 1)
+
+
 get_org_repos("Twitter", 1)

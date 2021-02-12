@@ -1,6 +1,13 @@
 /build/
 /dist/
 /truffleHog.egg-info/
+/truffleHogger.egg-info/
 **/__pycache__/
 **/*.pyc
 env/
+.DS_Store
+.venv/
+.pytest_cache/
+
+# there is an .idea/.gitignore file
+# .idea/
