@@ -71,6 +71,29 @@ def exit_app(exit_code):
     sys.exit(exit_code.value)
 
 
+def summary(args, output):
+    # By default nothing found, simply exit.
+    exit_code = ExitCode.FOUND_NONE
+
+    if output["countEntropy"] > 0 and output["countRegex"] > 0:
+        exit_code = ExitCode.FOUND_ENTROPY_AND_REGEX
+    elif output["countEntropy"] > 0:
+        exit_code = ExitCode.FOUND_ENTROPY
+    elif output["countRegex"] > 0:
+        exit_code = ExitCode.FOUND_REGEX
+
+    output["counTotal"] = output["countEntropy"] + output["countRegex"]
+    output['exitCode'] = {'name': exit_code.name, 'value': exit_code.value}
+
+    if args.output_json and args.output_json_stream:
+        # remove found_issues and output (as we streamed the results already)
+        del output['foundIssues']
+
+    print(json.dumps(output, sort_keys=True))
+
+    exit_app(exit_code)
+
+
 def main():
     global mask_secrets
 
@@ -173,24 +196,7 @@ def main():
                           output_json_stream=args.output_json_stream
                           )
 
-    def summary(exit_code):
-        # only batch print when not streaming json
-        if args.output_json and not args.output_json_stream:
-            output['exitCode'] = {'name': exit_code.name, 'value': exit_code.value}
-            print(json.dumps(output, sort_keys=True))
-        exit_app(exit_code)
-
-    output["counTotal"] = output["countEntropy"] + output["countRegex"]
-
-    if output["countEntropy"] > 0 and output["countRegex"] > 0:
-        summary(ExitCode.FOUND_ENTROPY_AND_REGEX)
-    elif output["countEntropy"] > 0:
-        summary(ExitCode.FOUND_ENTROPY)
-    elif output["countRegex"] > 0:
-        summary(ExitCode.FOUND_REGEX)
-
-    # Otherwise nothing found, simply exit.
-    summary(ExitCode.FOUND_NONE)
+    summary(args, output)
 
 
 def read_pattern(r):

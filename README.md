@@ -15,6 +15,7 @@ New features added:
   - temporary files are no longer created for security, thus also no cleanup.
   - the cleanup flag is now removed, cleanup is no longer required.
   - a summary is printed when `--json` is used.
+  - a summary is printed when `--json` and `--json-streaming` is used, however we remove the `foundIssues` key as they would have been previously streamed.
   - results are no longer streaming to stdout by default when using `--json`, and json output is done at the end (though this usuall  needs more memory, I've eliminated some structures that were being stored). This _could_ be problematic with extremely larg repositories. The benefit is that the json output can now be parsed as a single result. Use streaming option if you wish not t batch. 
   - a new arg `--json-streaming` allows streaming json results, requires also specifying the `--json` arg, useful for pipin commands. Note that this will no longer be the typical 'finalized' json object you'd expect.
   - no longer print or store the blob diff, we only now store the masked diff.
