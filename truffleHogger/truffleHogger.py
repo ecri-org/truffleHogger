@@ -20,7 +20,7 @@ from git import NULL_TREE
 
 import ctypes
 
-mask_secrets = True
+mask_secrets = True  # this can be removed later after migrating to args
 regexes = {}
 
 
@@ -99,13 +99,21 @@ def main():
 
     parser = argparse.ArgumentParser(description='Find secrets hidden in the depths of git.')
     parser.add_argument('--json', dest="output_json", action="store_true", help="Output in JSON")
-    parser.add_argument('--json-streaming', dest="output_json_stream", action="store_true", help="Output should be streaming when using json")
+    parser.add_argument('--json-streaming', dest="output_json_stream", action="store_true",
+                        help="Output should be streaming when using json")
     parser.add_argument("--regex", dest="do_regex", action="store_true", help="Enable high signal regex checks")
     parser.add_argument("--rules", dest="rules", help="Ignore default regexes and source from json file")
     parser.add_argument("--allow", dest="allow", help="Explicitly allow regexes from json list file")
     parser.add_argument("--entropy", dest="do_entropy", help="Enable entropy checks")
+    parser.add_argument("--entropy_threshold_base64", type=float, dest="entropy_threshold_base64",
+                        help="desired threshold when using a base64 set for randomness, "
+                             "accepts values between 0.0 (low) and 8.0 (high). Default is [4.5].")
+    parser.add_argument("--entropy_threshold_hex", type=float, dest="entropy_threshold_hex",
+                        help="desired threshold when using hex code set for randomness, "
+                             "accepts values between 0.0 (low) and 8.0 (high). Default is [3.0")
     parser.add_argument("--since_commit", dest="since_commit", help="Only scan from a given commit hash")
-    parser.add_argument("--max_depth", dest="max_depth", help="The max commit depth to go back when searching for secrets")
+    parser.add_argument("--max_depth", dest="max_depth",
+                        help="The max commit depth to go back when searching for secrets")
     parser.add_argument("--branch", dest="branch", help="Name of the branch to be scanned")
     parser.add_argument('-i', '--include_paths', type=argparse.FileType('r'), metavar='INCLUDE_PATHS_FILE',
                         help='File with regular expressions (one per line), at least one of which must match a Git '
@@ -117,12 +125,14 @@ def main():
                              'in order for it to be scanned; lines starting with "#" are treated as comments and are '
                              'ignored. If empty or not provided (default), no Git object paths are excluded unless '
                              'effectively excluded via the --include_paths option.')
-    parser.add_argument("--repo_path", type=str, dest="repo_path", help="Path to the cloned repo. If provided, git_url will not be used")
+    parser.add_argument("--repo_path", type=str, dest="repo_path",
+                        help="Path to the cloned repo. If provided, git_url will not be used")
     parser.add_argument("--print-diff", dest="print_diff", action='store_true', help="Print the diff")
 
     # The topic is 'mask_secrets', and the flag 'show-secrets' will mark mask_secrets as false,
     # otherwise we always mask secrets. It makes user interface flags easier to use.
-    parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false', help="Do not mask secrets in any output")
+    parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false',
+                        help="Do not mask secrets in any output")
 
     parser.add_argument('git_url', type=str, help='URL for secret searching')
     parser.set_defaults(regex=False)
@@ -131,6 +141,8 @@ def main():
     parser.set_defaults(max_depth=1000000)
     parser.set_defaults(since_commit=None)
     parser.set_defaults(entropy=True)
+    parser.set_defaults(entropy_threshold_base64=4.5)
+    parser.set_defaults(entropy_threshold_hex=3.0)
     parser.set_defaults(branch=None)
     parser.set_defaults(repo_path=None)
     parser.set_defaults(print_diff=False)
@@ -180,7 +192,8 @@ def main():
             if pattern and not pattern.startswith('#'):
                 path_exclusions.append(re.compile(pattern))
 
-    output = find_strings(args.git_url,
+    output = find_strings(args,
+                          args.git_url,
                           args.since_commit,
                           args.max_depth,
                           args.output_json,
@@ -230,6 +243,10 @@ def del_rw(action, name, exc):
 def shannon_entropy(data, iterator):
     """
     Borrowed from http://blog.dkbza.org/2007/05/scanning-data-for-entropy-anomalies.html
+    Returns a range between 0.0 and 8.0. Values close to 8.0 would indicate a high entropy,
+    hence the likelihood of compressed or otherwise highly random data. Low values would
+    indicate low complexity data such as text or executable instructions or any other
+    data exhibiting clear patterns.
     """
     if not data:
         return 0
@@ -312,7 +329,7 @@ def print_results(issue, print_diff):
     print("~~~~~~~~~~~~~~~~~~~~~")
 
 
-def find_entropy(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
+def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
     strings_found = []
     lines = printable_diff.split("\n")
 
@@ -322,13 +339,13 @@ def find_entropy(printable_diff, commit_time, branch_name, prev_commit, blob, pr
             hex_strings = get_strings_of_set(word, HEX_CHARS)
             for string in base64_strings:
                 b64_entropy = shannon_entropy(string, BASE64_CHARS)
-                if b64_entropy > 4.5:
+                if b64_entropy > args.entropy_threshold_base64:
                     strings_found.append(mask(string))
                     printable_diff = printable_diff.replace(string,
                                                             bcolors.WARNING + mask(string) + bcolors.ENDC)
             for string in hex_strings:
                 hex_entropy = shannon_entropy(string, HEX_CHARS)
-                if hex_entropy > 3:
+                if hex_entropy > args.entropy_threshold_hex:
                     strings_found.append(mask(string))
                     printable_diff = printable_diff.replace(string,
                                                             bcolors.WARNING + mask(string) + bcolors.ENDC)
@@ -351,7 +368,7 @@ def find_entropy(printable_diff, commit_time, branch_name, prev_commit, blob, pr
     return None
 
 
-def regex_check(printableDiff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes={}):
+def regex_check(args, printableDiff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes={}):
     if custom_regexes:
         secret_regexes = custom_regexes
     else:
@@ -380,7 +397,8 @@ def regex_check(printableDiff, commit_time, branch_name, prev_commit, blob, prin
     return regex_matches
 
 
-def diff_worker(diff,
+def diff_worker(args,
+                diff,
                 curr_commit,
                 prev_commit,
                 branch_name,
@@ -413,13 +431,13 @@ def diff_worker(diff,
         found_issues = []
 
         if do_entropy:
-            entropic_diff = find_entropy(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff)
+            entropic_diff = find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff)
             if entropic_diff:
                 found_issues.append(entropic_diff)
                 count_entropy += 1
 
         if do_regex:
-            found_regexes = regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes)
+            found_regexes = regex_check(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes)
             if len(found_regexes):
                 found_issues += found_regexes
                 count_regex += len(found_regexes)
@@ -463,7 +481,8 @@ def path_included(blob, include_patterns=None, exclude_patterns=None):
     return True
 
 
-def find_strings(git_url,
+def find_strings(args,
+                 git_url,
                  since_commit=None,
                  max_depth=1000000,
                  printJson=False,
@@ -520,6 +539,7 @@ def find_strings(git_url,
             already_searched.add(diff_hash)
 
             found_issues, count_entropy, count_regex = diff_worker(
+                args,
                 diff,
                 curr_commit,
                 prev_commit,
@@ -534,7 +554,7 @@ def find_strings(git_url,
                 path_exclusions,
                 allow,
                 print_diff,
-                output_json_stream
+                output_json_stream,
             )
 
             if len(found_issues) > 0:
@@ -554,6 +574,7 @@ def find_strings(git_url,
             diff = curr_commit.diff(NULL_TREE, create_patch=True)
 
         found_issues, count_entropy, count_regex = diff_worker(
+            args,
             diff,
             curr_commit,
             prev_commit,

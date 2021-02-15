@@ -20,10 +20,12 @@ New features added:
   - a new arg `--json-streaming` allows streaming json results, requires also specifying the `--json` arg, useful for pipin commands. Note that this will no longer be the typical 'finalized' json object you'd expect.
   - no longer print or store the blob diff, we only now store the masked diff.
   - remove project_path from output for security.
-  - no longer depends on truffleHogRegexes, it is now embedded under 'truffleHogger'
+  - no longer depends on truffleHogRegexes, it is now embedded under 'truffleHogger'.
   - version is bumped to `version='3.0.0'`, and the name changed from `truffleHog` to `truffleHogger`.
-  - the commit message for each result is truncated to 120 characters
-  - when specifying `--branch` the branch name is explicitly what was used instead of 'FETCH_HEAD' which made the output confusing
+  - the commit message for each result is truncated to 120 characters.
+  - when specifying `--branch` the branch name is explicitly what was used instead of 'FETCH_HEAD' which made the output confusing.
+  - new arg `--entropy_threshold_base64`, allows tuning of base64 threshold, default is set to 4.5.
+  - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
 
 Below is the orginal doc.
 
