@@ -16,6 +16,13 @@ except:
     from unittest.mock import MagicMock
 
 
+class MockArg:
+    def __init__(self, git_url, entropy_threshold_base64=4.5, entropy_threshold_hex=3):
+        self.git_url = git_url
+        self.entropy_threshold_base64 = entropy_threshold_base64
+        self.entropy_threshold_hex = entropy_threshold_hex
+
+
 class TestStringMethods(unittest.TestCase):
 
     def test_shannon(self):
@@ -30,8 +37,9 @@ class TestStringMethods(unittest.TestCase):
         self.assertTrue(os.path.isfile(license_file))
 
     def test_unicode_expection(self):
-        try:
-            truffleHogger.find_strings("https://github.com/dxa4481/tst.git")
+        try:  # TODO: create the unicode test repo programmatically
+            mock_arg = MockArg('https://github.com/dxa4481/tst.git')
+            truffleHogger.find_strings(mock_arg, mock_arg.git_url)
         except UnicodeEncodeError:
             self.fail("Unicode print error")
 
@@ -50,11 +58,15 @@ class TestStringMethods(unittest.TestCase):
             tmp_stdout = io.BytesIO()
         bak_stdout = sys.stdout
 
+        # slowly start to modify the signatures to use a param object, hence we must mock it
+        mock_arg = MockArg("https://github.com/dxa4481/truffleHog.git")
+
         # Redirect STDOUT, run scan and re-establish STDOUT
         sys.stdout = tmp_stdout
         try:
             truffleHogger.find_strings(
-                "https://github.com/dxa4481/truffleHog.git",
+                mock_arg,
+                mock_arg.git_url,
                 since_commit=since_commit,
                 printJson=True,
                 surpress_output=False,
@@ -65,7 +77,6 @@ class TestStringMethods(unittest.TestCase):
         json_result_list = tmp_stdout.getvalue().split('\n')
         results = [json.loads(r) for r in json_result_list if bool(r.strip())]
         filtered_results = list(filter(lambda r: r['commitHash'] == commit_w_secret and r['branch'] == 'origin/master', results))
-
         self.assertEqual(1, len(filtered_results))
         self.assertEqual(commit_w_secret, filtered_results[0]['commitHash'])
         # Additionally, we cross-validate the commit comment matches the expected comment
@@ -77,8 +88,11 @@ class TestStringMethods(unittest.TestCase):
     def test_branch(self, rmtree_mock, repo_const_mock, clone_git_repo):
         repo = MagicMock()
         repo_const_mock.return_value = repo
-        truffleHogger.find_strings("test_repo", branch="testbranch")
+
+        mock_arg = MockArg("test_repo")
+        truffleHogger.find_strings(mock_arg, mock_arg.git_url, branch="testbranch")
         repo.remotes.origin.fetch.assert_called_once_with("testbranch")
+
     def test_path_included(self):
         Blob = namedtuple('Blob', ('a_path', 'b_path'))
         blobs = {
@@ -146,7 +160,8 @@ class TestStringMethods(unittest.TestCase):
     @patch('truffleHogger.truffleHogger.Repo')
     @patch('shutil.rmtree')
     def test_repo_path(self, rmtree_mock, repo_const_mock, clone_git_repo):
-        truffleHogger.find_strings("test_repo", repo_path="test/path/")
+        mock_arg = MockArg("test_repo")
+        truffleHogger.find_strings(mock_arg, mock_arg.git_url, repo_path="test/path/")
         rmtree_mock.assert_not_called()
         clone_git_repo.assert_not_called()
 
