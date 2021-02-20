@@ -1,15 +1,16 @@
 FROM docker.io/python:3-alpine
 
-ARG DIST_FILE=dist/truffleHogger-3.0.0-py2.py3-none-any.whl
-COPY $DIST_FILE /tmp/$DIST_FILE
+ARG RELEASE=3.0.0
+ARG WHEEL_FILE=truffleHogger-${RELEASE}-py2.py3-none-any.whl
+ARG DEST_FILE=/tmp/$WHEEL_FILE
 
-RUN ls -la /tmp/
+COPY ./dist/$WHEEL_FILE $DEST_FILE
 
 RUN adduser -S truffleHogger
 
 RUN apk add --no-cache git && \
-    pip install /tmp/$DIST_FILE && \
-    rm -Rf /tmp/$DIST_FILE
+    pip install $DEST_FILE && \
+    rm -Rf $DEST_FILE
 
 USER truffleHogger
 WORKDIR /proj
