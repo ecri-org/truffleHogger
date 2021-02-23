@@ -134,7 +134,9 @@ def main():
     parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false',
                         help="Do not mask secrets in any output")
 
-    parser.add_argument('git_url', type=str, help='URL for secret searching')
+    parser.add_argument('git_url', type=str, help='URI to use use in the form of URI'
+                                                  'such as https|git|file _OR_ local path (i.e. /some/path)')
+
     parser.set_defaults(regex=False)
     parser.set_defaults(rules={})
     parser.set_defaults(allow={})
