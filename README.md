@@ -4,7 +4,7 @@ This is a fork of [truffleHog](https://github.com/dxa4481/truffleHog) but with s
 
 "Searches through git repositories for secrets, digging deep into commit history and branches. This is effective at finding secrets accidentally committed."
 
-![Build Status](https://github.com/ecri-org/truffleHogger/actions/workflows/tests.yml/badge.svg)
+![Build Status](https://github.com/ecri-org/truffleHogger/actions/workflows/tests.yml/badge.svg?branch=main)
 
 ## Modifications
 
