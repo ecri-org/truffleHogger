@@ -1,10 +1,14 @@
 # truffleHogger
 
+This is a fork of [truffleHog](https://github.com/dxa4481/truffleHog) but with several modifications that make it even more useful.
+
 ## Modifications
 
 ### Warning
 
-> Warning: While we try to mask data when found it is not perfect. This is why diffs are by default not printed.
+> Warning: While we try to mask data when found it may not be perfect. This is why diffs are by default not printed.
+
+### Forked Features
 
 New features added:
 
@@ -27,7 +31,8 @@ New features added:
   - new arg `--entropy_threshold_base64`, allows tuning of base64 threshold, default is set to 4.5.
   - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
 
-Below is the orginal doc.
+
+# Original Readme
 
 [![Build Status](https://travis-ci.org/dxa4481/truffleHog.svg?branch=master)](https://travis-ci.org/dxa4481/truffleHog)
 [![codecov](https://codecov.io/gh/dxa4481/truffleHog/branch/master/graph/badge.svg)](https://codecov.io/gh/dxa4481/truffleHog)
