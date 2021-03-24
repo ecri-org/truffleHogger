@@ -15,13 +15,13 @@ New features added:
   - some code was reformatted to python standard (spacing, naming).
   - by default the application will mask passwords (see `--show-secrets` if you would rather see them).
   - a new arg `--show-secrets` will show secrets found, by default will NOT show secrets.
-  - a new arg `--print-diff` will print the diff. By default, the diff is not printed for better security (questionable) if unknow  or uncontrolled logging is being done. The output will always include the file where a secret is found. This works to suppress th diff field even in json output!
+  - a new arg `--print-diff` will print the diff. By default, the diff is not printed for better security (questionable) if unknown or uncontrolled logging is being done. The output will always include the file where a secret is found. This works to suppress the diff field even in json output!
   - temporary files are no longer created for security, thus also no cleanup.
   - the cleanup flag is now removed, cleanup is no longer required.
   - a summary is printed when `--json` is used.
   - a summary is printed when `--json` and `--json-streaming` is used, however we remove the `foundIssues` key as they would have been previously streamed.
-  - results are no longer streaming to stdout by default when using `--json`, and json output is done at the end (though this usuall  needs more memory, I've eliminated some structures that were being stored). This _could_ be problematic with extremely larg repositories. The benefit is that the json output can now be parsed as a single result. Use streaming option if you wish not t batch. 
-  - a new arg `--json-streaming` allows streaming json results, requires also specifying the `--json` arg, useful for pipin commands. Note that this will no longer be the typical 'finalized' json object you'd expect.
+  - results are no longer streaming to stdout by default when using `--json`, and json output is done at the end (though this usually needs more memory, I've eliminated some structures that were being stored). This _could_ be problematic with extremely large repositories. The benefit is that the json output can now be parsed as a single result. Use streaming option if you wish not t batch. 
+  - a new arg `--json-streaming` allows streaming json results, requires also specifying the `--json` arg, useful for piping commands. Note that this will no longer be the typical 'finalized' json object you'd expect.
   - no longer print or store the blob diff, we only now store the masked diff.
   - remove project_path from output for security.
   - no longer depends on truffleHogRegexes, it is now embedded under 'truffleHogger'.
