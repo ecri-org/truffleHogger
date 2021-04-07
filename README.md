@@ -36,6 +36,15 @@ New features added:
   - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
 
 
+### Development
+
+All branches run the test actions.
+Tagging build and release a container. To release a version the prefix must be start with `v`. For example, `v3.0.0`
+When versioning change version in the `version` file. This will drive versioning throughout the build and container building pipelines.
+
+> Note: the build version n `Dockerfile` is set up as an arg with a default value, if the build is working correctly the proper values should be passed through (read from the `version` file).
+
+
 # Original Readme
 
 [![Build Status](https://travis-ci.org/dxa4481/truffleHog.svg?branch=master)](https://travis-ci.org/dxa4481/truffleHog)
