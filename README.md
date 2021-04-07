@@ -15,7 +15,7 @@ This is a fork of [truffleHog](https://github.com/dxa4481/truffleHog) but with s
 ### Forked Features
 
 New features added:
-
+  - handles the new [GitHub authentication token formats](https://github.blog/2021-04-05-behind-githubs-new-authentication-token-formats/)
   - some code was reformatted to python standard (spacing, naming).
   - by default the application will mask passwords (see `--show-secrets` if you would rather see them).
   - a new arg `--show-secrets` will show secrets found, by default will NOT show secrets.
