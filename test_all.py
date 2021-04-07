@@ -24,6 +24,33 @@ class MockArg:
 
 
 class TestStringMethods(unittest.TestCase):
+    def test_regex(self):
+        import re
+        regexes = truffleHogger.load_regexes()
+        # every one of these should match and if any did not, fail the test
+        test_strings = [
+            'sk_test_4eC39HqLyjWDarjtT1zdp7dc',
+            'rk_test_4eC39HqLyjWDarjtT1zdp7dc',
+            'ghp_000000000000000000000000000000000000',
+            'ghp_ki4gI9AaxP1Tc53PEMmbv4d2NDzzez3fMWop'
+            'gho_000000000000000000000000000000000000',
+            'gho_ki4gI9AaxP1Tc53PEMmbv4d2NDzzez3fMWop'
+            'ghu_000000000000000000000000000000000000',
+            'ghu_ki4gI9AaxP1Tc53PEMmbv4d2NDzzez3fMWop'
+            'ghs_000000000000000000000000000000000000',
+            'ghs_ki4gI9AaxP1Tc53PEMmbv4d2NDzzez3fMWop'
+            'ghr_000000000000000000000000000000000000',
+            'ghr_ki4gI9AaxP1Tc53PEMmbv4d2NDzzez3fMWop'
+        ]
+        for test_string in test_strings:
+            matches = 0
+            for key in regexes:
+                found_strings = re.findall(regexes[key], test_string)
+                if len(found_strings) > 0:
+                    # print(f"regex: {regexes[key]}, found:{found_strings}")
+                    matches += 1
+            if matches == 0:
+                self.fail(f"Expected to find a regex match but could not for {test_string}")
 
     def test_shannon(self):
         random_stringB64 = "ZWVTjPQSdhwRgl204Hc51YCsritMIzn8B=/p9UyeX7xu6KkAGqfm3FJ+oObLDNEva"
