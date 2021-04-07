@@ -25,12 +25,14 @@ regexes = {}
 
 
 def load_regexes():
-    global regexes
+    regex_list = {}
     with open(os.path.join(os.path.dirname(__file__), "regexes.json"), 'r') as f:
-        regexes = json.loads(f.read())
+        regex_list = json.loads(f.read())
 
     for key in regexes:
-        regexes[key] = re.compile(regexes[key])
+        regex_list[key] = re.compile(regex_list[key])
+
+    return regex_list
 
 
 class ExitCode(Enum):
@@ -96,6 +98,7 @@ def summary(args, output):
 
 def main():
     global mask_secrets
+    global regexes
 
     parser = argparse.ArgumentParser(description='Find secrets hidden in the depths of git.')
     parser.add_argument('--json', dest="output_json", action="store_true", help="Output in JSON")
@@ -154,7 +157,7 @@ def main():
     mask_secrets = args.mask_secrets
 
     if args.do_regex:
-        load_regexes()
+        regexes = load_regexes()
 
     rules = {}
     if args.rules:
@@ -378,10 +381,12 @@ def regex_check(args, printableDiff, commit_time, branch_name, prev_commit, blob
 
     regex_matches = []
     for key in secret_regexes:
-        found_strings = secret_regexes[key].findall(printableDiff)
+        found_strings = re.findall(secret_regexes[key], printableDiff)
+
         for found_string in found_strings:
             recorded_value = mask(found_string)
             found_diff = printableDiff.replace(printableDiff, bcolors.WARNING + recorded_value + bcolors.ENDC)
+
         if found_strings:
             foundRegex = {}
             _commit = prev_commit.message
