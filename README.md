@@ -36,6 +36,11 @@ New features added:
   - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
 
 
+## Docker
+
+We build an image that you can use: `docker pull ghcr.io/ecri-org/trufflehogger:latest`
+
+
 ### Development
 
 All branches run the test actions.
