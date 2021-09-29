@@ -34,7 +34,7 @@ New features added:
   - when specifying `--branch` the branch name is explicitly what was used instead of 'FETCH_HEAD' which made the output confusing.
   - new arg `--entropy_threshold_base64`, allows tuning of base64 threshold, default is set to 4.5.
   - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
-
+  - new arg `--length_threshold`, allows specifying the minimum length of words which will be scanned for entropy, default is set to 20.
 
 ## Docker
 
@@ -47,7 +47,7 @@ All branches run the test actions.
 Tagging build and release a container. To release a version the prefix must be start with `v`. For example, `v3.0.0`
 When versioning change version in the `version` file. This will drive versioning throughout the build and container building pipelines.
 
-> Note: the build version n `Dockerfile` is set up as an arg with a default value, if the build is working correctly the proper values should be passed through (read from the `version` file).
+> Note: the build version `Dockerfile` is set up as an arg with a default value, if the build is working correctly the proper values should be passed through (read from the `version` file).
 
 
 # Original Readme

@@ -17,10 +17,11 @@ except:
 
 
 class MockArg:
-    def __init__(self, git_url, entropy_threshold_base64=4.5, entropy_threshold_hex=3):
+    def __init__(self, git_url, entropy_threshold_base64=4.5, entropy_threshold_hex=3, length_threshold=20):
         self.git_url = git_url
         self.entropy_threshold_base64 = entropy_threshold_base64
         self.entropy_threshold_hex = entropy_threshold_hex
+        self.length_threshold = length_threshold
 
 
 class TestStringMethods(unittest.TestCase):

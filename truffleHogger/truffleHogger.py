@@ -107,13 +107,15 @@ def main():
     parser.add_argument("--regex", dest="do_regex", action="store_true", help="Enable high signal regex checks")
     parser.add_argument("--rules", dest="rules", help="Ignore default regexes and source from json file")
     parser.add_argument("--allow", dest="allow", help="Explicitly allow regexes from json list file")
+    parser.add_argument("--length_threshold", dest="length_threshold", type=int,
+                        help="minimum length of any 'word' to be scanned for entropy. Default is [19].")
     parser.add_argument("--entropy", dest="do_entropy", help="Enable entropy checks")
     parser.add_argument("--entropy_threshold_base64", type=float, dest="entropy_threshold_base64",
                         help="desired threshold when using a base64 set for randomness, "
                              "accepts values between 0.0 (low) and 8.0 (high). Default is [4.5].")
     parser.add_argument("--entropy_threshold_hex", type=float, dest="entropy_threshold_hex",
                         help="desired threshold when using hex code set for randomness, "
-                             "accepts values between 0.0 (low) and 8.0 (high). Default is [3.0")
+                             "accepts values between 0.0 (low) and 8.0 (high). Default is [3.0]")
     parser.add_argument("--since_commit", dest="since_commit", help="Only scan from a given commit hash")
     parser.add_argument("--max_depth", dest="max_depth",
                         help="The max commit depth to go back when searching for secrets")
@@ -145,6 +147,7 @@ def main():
     parser.set_defaults(allow={})
     parser.set_defaults(max_depth=1000000)
     parser.set_defaults(since_commit=None)
+    parser.set_defaults(length_threshold=20)
     parser.set_defaults(entropy=True)
     parser.set_defaults(entropy_threshold_base64=4.5)
     parser.set_defaults(entropy_threshold_hex=3.0)
@@ -263,7 +266,7 @@ def shannon_entropy(data, iterator):
     return entropy
 
 
-def get_strings_of_set(word, char_set, threshold=20):
+def get_strings_of_set(word, char_set, threshold):
     count = 0
     letters = ""
     strings = []
@@ -336,12 +339,13 @@ def print_results(issue, print_diff):
 
 def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
     strings_found = []
+    threshold = args.length_threshold
     lines = printable_diff.split("\n")
 
     for line in lines:
         for word in line.split():
-            base64_strings = get_strings_of_set(word, BASE64_CHARS)
-            hex_strings = get_strings_of_set(word, HEX_CHARS)
+            base64_strings = get_strings_of_set(word, BASE64_CHARS, threshold)
+            hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
             for string in base64_strings:
                 b64_entropy = shannon_entropy(string, BASE64_CHARS)
                 if b64_entropy > args.entropy_threshold_base64:
