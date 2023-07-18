@@ -1,7 +1,7 @@
 attrs==20.3.0
 certifi==2020.12.5
 chardet==4.0.0
-codecov==2.0.15
+codecov==2.1.13
 coverage==5.4
 gitdb==4.0.5
 gitdb2==4.0.2
@@ -12,10 +12,10 @@ iniconfig==1.1.1
 linecache2==1.0.0
 packaging==20.9
 pluggy==0.13.1
-py==1.10.0
+py==1.11.0
 pyparsing==2.4.7
-pytest==6.2.2
-pytest-cov==2.5.1
+pytest==7.4.0
+pytest-cov==4.1.0
 requests==2.25.1
 six==1.15.0
 smmap==3.0.5

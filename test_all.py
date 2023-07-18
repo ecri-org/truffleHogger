@@ -60,7 +60,7 @@ class TestStringMethods(unittest.TestCase):
         self.assertGreater(truffleHogger.shannon_entropy(random_stringHex, truffleHogger.HEX_CHARS), 3)
 
     def test_cloning(self):
-        project_path = truffleHogger.clone_git_repo("https://github.com/dxa4481/truffleHog.git")
+        project_path = truffleHogger.clone_git_repo("https://github.com/ecri-org/truffleHogger.git")
         license_file = os.path.join(project_path, "LICENSE")
         self.assertTrue(os.path.isfile(license_file))
 
@@ -74,12 +74,11 @@ class TestStringMethods(unittest.TestCase):
     def test_return_correct_commit_hash(self):
         # Start at commit 202564cf776b402800a4aab8bb14fa4624888475, which 
         # is immediately followed by a secret inserting commit:
-        # https://github.com/dxa4481/truffleHog/commit/d15627104d07846ac2914a976e8e347a663bbd9b
+        # https://github.com/ecri-org/truffleHogger/commit/d15627104d07846ac2914a976e8e347a663bbd9b
         since_commit = '202564cf776b402800a4aab8bb14fa4624888475'
         commit_w_secret = 'd15627104d07846ac2914a976e8e347a663bbd9b'
         cross_valdiating_commit_w_secret_comment = 'Oh no a secret file'
 
-        json_result = ''
         if sys.version_info >= (3,):
             tmp_stdout = io.StringIO()
         else:
@@ -87,7 +86,7 @@ class TestStringMethods(unittest.TestCase):
         bak_stdout = sys.stdout
 
         # slowly start to modify the signatures to use a param object, hence we must mock it
-        mock_arg = MockArg("https://github.com/dxa4481/truffleHog.git")
+        mock_arg = MockArg("https://github.com/ecri-org/truffleHogger.git")
 
         # Redirect STDOUT, run scan and re-establish STDOUT
         sys.stdout = tmp_stdout
@@ -104,7 +103,9 @@ class TestStringMethods(unittest.TestCase):
 
         json_result_list = tmp_stdout.getvalue().split('\n')
         results = [json.loads(r) for r in json_result_list if bool(r.strip())]
-        filtered_results = list(filter(lambda r: r['commitHash'] == commit_w_secret and r['branch'] == 'origin/master', results))
+        filtered_results = list(
+            filter(lambda r: r['commitHash'] == commit_w_secret and r['branch'] == 'origin/main', results)
+        )
         self.assertEqual(1, len(filtered_results))
         self.assertEqual(commit_w_secret, filtered_results[0]['commitHash'])
         # Additionally, we cross-validate the commit comment matches the expected comment
