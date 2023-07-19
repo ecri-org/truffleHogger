@@ -353,28 +353,41 @@ def print_results(issue, print_diff):
     print(output)
 
 
-def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
-    strings_found = []
-    line_numbers_found = []
-    threshold = args.length_threshold
-
-    hunk_line_numbers = re.findall(r'@@ [-+]?(\d+),(\d+)', printable_diff)
+def get_hunk_values(diff):
+    curr_line = 0
     original_start = 0
     original_count = 0
-    curr_line = 0
+    modified_start = 0
+    index_correction = 1  # always count by 1
+    hunk_line_numbers = re.findall(r'@@ [-+]?(\d+),(\d+)(?: ([-+]?\d+))?', diff)
 
     if hunk_line_numbers:
         original_start = abs(int(hunk_line_numbers[0][0]))
         original_count = abs(int(hunk_line_numbers[0][1]))
+        modified_start = abs(int(hunk_line_numbers[0][2]))
+
+    if original_start == original_count:  # file added
+        prefix = '+'
+    else:  # count removals
+        prefix = '-'
+
+    # pattern match here for strange cases
+    # if f'{original_start},{original_count},{modified_start}' == '0,0,1':  # the case where 1 file, 1 line
+    if (original_start, original_count, modified_start) == (0, 0, 1):  # the case where 1 file, 1 line
+        index_correction = 0
+
+    return curr_line, index_correction, original_start, original_count, prefix
+
+
+def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
+    strings_found = []
+    line_numbers_found = []
+    threshold = args.length_threshold
+    curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
     for index, line in enumerate(printable_diff.split("\n")):
-        if original_start == original_count:  # file added
-            prefix = '+'
-        else:  # count removals
-            prefix = '-'
-
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-            curr_line = (original_start - 1) + index  # the next line in the hunk is the start of the 0 index
+            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
 
         for word in line.split():
             base64_strings = get_strings_of_set(word, BASE64_CHARS, threshold)
@@ -417,8 +430,12 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
     return None
 
 
-def zipEntries(lines, strings):
+def zipEntries(lines, strings, annotate=True):
     zipped = zip(lines, strings)
+
+    if not annotate:
+        return [f'{x}:{y}' for x, y in zipped]
+
     return [f'L{x}:{y}' for x, y in zipped]
 
 
@@ -426,29 +443,18 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
     strings_found = []
     line_numbers_found = []
     regex_matches = []
+    secret_types_found = []
 
     if custom_regexes:
         secret_regexes = custom_regexes
     else:
         secret_regexes = regexes
 
-    hunk_line_numbers = re.findall(r'@@ [-+]?(\d+),(\d+)', printable_diff)
-    original_start = 0
-    original_count = 0
-    curr_line = 0
-
-    if hunk_line_numbers:
-        original_start = abs(int(hunk_line_numbers[0][0]))
-        original_count = abs(int(hunk_line_numbers[0][1]))
+    curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
     for index, line in enumerate(printable_diff.split("\n")):
-        if original_start == original_count:  # file added
-            prefix = '+'
-        else:  # count removals
-            prefix = '-'
-
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-            curr_line = (original_start - 1) + index  # the next line in the hunk is the start of the 0 index
+            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
 
         for key in secret_regexes:
             found_strings = re.findall(secret_regexes[key], line)
@@ -457,6 +463,7 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
                 secret = mask(found_string)
                 found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
                 strings_found.append(secret)
+                secret_types_found.append(key)
                 line_numbers_found.append(curr_line)
 
     if len(strings_found) > 0:
@@ -470,10 +477,11 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
         foundRegex['stringsFound'] = strings_found  # already has masked strings, don't remask
         foundRegex['linesFound'] = line_numbers_found  # lines where hits found
+        foundRegex['secretTypesFound'] = zipEntries(line_numbers_found, zipEntries(secret_types_found, strings_found, annotate=False))
         foundRegex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
         foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
         foundRegex['commitHash'] = prev_commit.hexsha
-        foundRegex['reason'] = "High Entropy"
+        foundRegex['reason'] = key
         regex_matches.append(foundRegex)
 
     return regex_matches
