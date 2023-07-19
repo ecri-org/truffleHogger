@@ -84,7 +84,7 @@ def summary(args, output):
     elif output["countRegex"] > 0:
         exit_code = ExitCode.FOUND_REGEX
 
-    output["counTotal"] = output["countEntropy"] + output["countRegex"]
+    output["countTotal"] = output["countEntropy"] + output["countRegex"]
     output['exitCode'] = {'name': exit_code.name, 'value': exit_code.value}
 
     if args.output_json and args.output_json_stream:
@@ -302,60 +302,111 @@ def clone_git_repo(git_url):
 
 
 def print_results(issue, print_diff):
+    global mask_secrets
+
     commit_time = issue['date']
     branch_name = issue['branch']
     prev_commit = issue['commit']
-    printableDiff = issue['printDiff']
-    commitHash = issue['commitHash']
+    printable_diff = issue['printDiff']
+    commit_hash = issue['commitHash']
+    lines_found = issue['linesFound']
+    detailed_found = issue['detailedFound']
     reason = issue['reason']
     path = issue['path']
 
-    print("~~~~~~~~~~~~~~~~~~~~~")
-    reason = "{}Reason: {}{}".format(bcolors.OKGREEN, reason, bcolors.ENDC)
-    print(reason)
-    dateStr = "{}Date: {}{}".format(bcolors.OKGREEN, commit_time, bcolors.ENDC)
-    print(dateStr)
-    hashStr = "{}Hash: {}{}".format(bcolors.OKGREEN, commitHash, bcolors.ENDC)
-    print(hashStr)
-    filePath = "{}Filepath: {}{}".format(bcolors.OKGREEN, path, bcolors.ENDC)
-    print(filePath)
+    reason = f"{bcolors.OKGREEN}Reason: {reason}{bcolors.ENDC}"
+    date_str = f"{bcolors.OKGREEN}Date: {commit_time}{bcolors.ENDC}"
+    hash_str = f"{bcolors.OKGREEN}Hash: {commit_hash}{bcolors.ENDC}"
+    file_path = f"{bcolors.OKGREEN}Filepath: {path}{bcolors.ENDC}"
+    lines_str = f"{bcolors.OKGREEN}Lines: {lines_found}{bcolors.ENDC}"
+
+    if mask_secrets:
+        detail_str = f"{bcolors.OKGREEN}DetailedLines: <masked-possible-passwords> {bcolors.ENDC}"
+    else:
+        detail_str = f"{bcolors.OKGREEN}DetailedLines: {detailed_found}{bcolors.ENDC}"
 
     if sys.version_info >= (3, 0):
-        branchStr = "{}Branch: {}{}".format(bcolors.OKGREEN, branch_name, bcolors.ENDC)
-        print(branchStr)
-        commitStr = "{}Commit: {}{}".format(bcolors.OKGREEN, prev_commit, bcolors.ENDC)
-        print(commitStr)
-        if print_diff:
-            print(printableDiff)
+        branch_str = f"{bcolors.OKGREEN}Branch: {branch_name}{bcolors.ENDC}"
+        commit_str = f"{bcolors.OKGREEN}Commit: {prev_commit}{bcolors.ENDC}".replace('\n', '')
+        diff = printable_diff if print_diff else '<suppressed>'
+        diff_str = f'{bcolors.OKGREEN}Diff: {diff}{bcolors.ENDC}'
     else:
-        branchStr = "{}Branch: {}{}".format(bcolors.OKGREEN, branch_name.encode('utf-8'), bcolors.ENDC)
-        print(branchStr)
-        commitStr = "{}Commit: {}{}".format(bcolors.OKGREEN, prev_commit.encode('utf-8'), bcolors.ENDC)
-        print(commitStr)
-        if print_diff:
-            print(printableDiff.encode('utf-8'))
-    print("~~~~~~~~~~~~~~~~~~~~~")
+        branch_str = f"{bcolors.OKGREEN}Branch: {branch_name.encode('utf-8')}{bcolors.ENDC}"
+        commit_str = f"{bcolors.OKGREEN}Commit: {prev_commit.encode('utf-8')}{bcolors.ENDC}".replace('\n', '')
+        diff = printable_diff.encode("utf-8") if print_diff else '<suppressed>'
+        diff_str = f'{bcolors.OKGREEN}Diff: {diff}{bcolors.ENDC}'
+
+    output = f'''
+    ~~~~~~~~~~~~~~~~~~~~~
+    {reason}
+    {date_str}
+    {hash_str}
+    {file_path}
+    {branch_str}
+    {lines_str}
+    {detail_str}
+    {commit_str[0:65]}
+    {diff_str}
+    ~~~~~~~~~~~~~~~~~~~~~
+    '''
+
+    print(output)
+
+
+def get_hunk_values(diff):
+    curr_line = 0
+    original_start = 0
+    original_count = 0
+    modified_start = 0
+    index_correction = 1  # always count by 1
+    hunk_line_numbers = re.findall(r'@@ [-+]?(\d+),(\d+)(?: ([-+]?\d+))?', diff)
+
+    if hunk_line_numbers:
+        original_start = abs(int(hunk_line_numbers[0][0]))
+        original_count = abs(int(hunk_line_numbers[0][1]))
+        modified_start = abs(int(hunk_line_numbers[0][2]))
+
+    if original_start == original_count:  # file added
+        prefix = '+'
+    else:  # count removals
+        prefix = '-'
+
+    # pattern match here for strange cases
+    # if f'{original_start},{original_count},{modified_start}' == '0,0,1':  # the case where 1 file, 1 line
+    if (original_start, original_count, modified_start) == (0, 0, 1):  # the case where 1 file, 1 line
+        index_correction = 0
+
+    return curr_line, index_correction, original_start, original_count, prefix
 
 
 def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
     strings_found = []
+    line_numbers_found = []
     threshold = args.length_threshold
-    lines = printable_diff.split("\n")
+    curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
-    for line in lines:
+    for index, line in enumerate(printable_diff.split("\n")):
+        if line.startswith(prefix) or line.startswith(' '):  # always count empty
+            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
+
         for word in line.split():
             base64_strings = get_strings_of_set(word, BASE64_CHARS, threshold)
             hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
+
             for string in base64_strings:
                 b64_entropy = shannon_entropy(string, BASE64_CHARS)
                 if b64_entropy > args.entropy_threshold_base64:
-                    strings_found.append(mask(string))
+                    secret = mask(string)
+                    strings_found.append(secret)
+                    line_numbers_found.append(curr_line)
                     printable_diff = printable_diff.replace(string,
                                                             bcolors.WARNING + mask(string) + bcolors.ENDC)
             for string in hex_strings:
                 hex_entropy = shannon_entropy(string, HEX_CHARS)
                 if hex_entropy > args.entropy_threshold_hex:
-                    strings_found.append(mask(string))
+                    secret = mask(string)
+                    strings_found.append(secret)
+                    line_numbers_found.append(curr_line)
                     printable_diff = printable_diff.replace(string,
                                                             bcolors.WARNING + mask(string) + bcolors.ENDC)
 
@@ -369,6 +420,8 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
         # please rely on printDiff as that is masked
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
         entropic_diff['stringsFound'] = strings_found  # already has masked strings, don't remask
+        entropic_diff['linesFound'] = line_numbers_found  # lines where hits found
+        entropic_diff['detailedFound'] = zipEntries(line_numbers_found, strings_found)
         entropic_diff['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
         entropic_diff['commitHash'] = prev_commit.hexsha
         entropic_diff['reason'] = "High Entropy"
@@ -377,36 +430,61 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
     return None
 
 
-def regex_check(args, printableDiff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes={}):
+def zipEntries(lines, strings, annotate=True):
+    zipped = zip(lines, strings)
+
+    if not annotate:
+        return [f'{x}:{y}' for x, y in zipped]
+
+    return [f'L{x}:{y}' for x, y in zipped]
+
+
+def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes={}):
+    strings_found = []
+    line_numbers_found = []
+    regex_matches = []
+    secret_types_found = []
+
     if custom_regexes:
         secret_regexes = custom_regexes
     else:
         secret_regexes = regexes
 
-    regex_matches = []
-    for key in secret_regexes:
-        found_strings = re.findall(secret_regexes[key], printableDiff)
+    curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
-        for found_string in found_strings:
-            recorded_value = mask(found_string)
-            found_diff = printableDiff.replace(printableDiff, bcolors.WARNING + recorded_value + bcolors.ENDC)
+    for index, line in enumerate(printable_diff.split("\n")):
+        if line.startswith(prefix) or line.startswith(' '):  # always count empty
+            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
 
-        if found_strings:
-            foundRegex = {}
-            _commit = prev_commit.message
-            foundRegex['date'] = commit_time
-            foundRegex['path'] = blob.b_path if blob.b_path else blob.a_path
-            foundRegex['branch'] = branch_name
-            foundRegex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
-            # please rely on printDiff as that is masked
-            # foundRegex['diff'] = blob.diff.decode('utf-8', errors='replace')
-            foundRegex['stringsFound'] = mask(found_strings)
-            foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
-            foundRegex['reason'] = key
-            foundRegex['commitHash'] = prev_commit.hexsha
-            regex_matches.append(foundRegex)
+        for key in secret_regexes:
+            found_strings = re.findall(secret_regexes[key], line)
+
+            for found_string in found_strings:
+                secret = mask(found_string)
+                found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
+                strings_found.append(secret)
+                secret_types_found.append(key)
+                line_numbers_found.append(curr_line)
+
+    if len(strings_found) > 0:
+        foundRegex = {}
+        _commit = prev_commit.message
+        foundRegex['date'] = commit_time
+        foundRegex['path'] = blob.b_path if blob.b_path else blob.a_path
+        foundRegex['branch'] = branch_name
+        foundRegex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
+        # please rely on printDiff as that is masked
+        # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
+        foundRegex['stringsFound'] = strings_found  # already has masked strings, don't remask
+        foundRegex['linesFound'] = line_numbers_found  # lines where hits found
+        foundRegex['secretTypesFound'] = zipEntries(line_numbers_found, zipEntries(secret_types_found, strings_found, annotate=False))
+        foundRegex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
+        foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
+        foundRegex['commitHash'] = prev_commit.hexsha
+        foundRegex['reason'] = key
+        regex_matches.append(foundRegex)
+
     return regex_matches
-
 
 def diff_worker(args,
                 diff,
@@ -448,7 +526,7 @@ def diff_worker(args,
                 count_entropy += 1
 
         if do_regex:
-            found_regexes = regex_check(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes)
+            found_regexes = regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes)
             if len(found_regexes):
                 found_issues += found_regexes
                 count_regex += len(found_regexes)
