@@ -140,6 +140,8 @@ def main():
     # otherwise we always mask secrets. It makes user interface flags easier to use.
     parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false',
                         help="Do not mask secrets in any output")
+    parser.add_argument("--color", dest="color", action='store_true',
+                        help="Print console friendly colors.")
 
     parser.add_argument('git_url', type=str, help='URI to use use in the form of URI'
                                                   'such as https|git|file _OR_ local path (i.e. /some/path)')
@@ -159,6 +161,7 @@ def main():
     parser.set_defaults(mask_secrets=True)
     parser.set_defaults(output_json_stream=False)
     parser.set_defaults(suppress_summary=False)
+    parser.set_defaults(color=False)
     args = parser.parse_args()
     mask_secrets = args.mask_secrets
 
@@ -305,8 +308,15 @@ def clone_git_repo(git_url):
     return project_path
 
 
-def print_results(issue, print_diff):
+def print_results(color, issue, print_diff):
     global mask_secrets
+
+    if color:
+        line_color_start = bcolors.OKGREEN
+        line_color_end = bcolors.ENDC
+    else:
+        line_color_start = ''
+        line_color_end = ''
 
     commit_time = issue['date']
     branch_name = issue['branch']
@@ -318,31 +328,31 @@ def print_results(issue, print_diff):
     reason = issue['reason']
     path = issue['path']
 
-    reason = f"{bcolors.OKGREEN}Reason: {reason}{bcolors.ENDC}"
-    date_str = f"{bcolors.OKGREEN}Date: {commit_time}{bcolors.ENDC}"
-    hash_str = f"{bcolors.OKGREEN}Hash: {commit_hash}{bcolors.ENDC}"
-    file_path = f"{bcolors.OKGREEN}Filepath: {path}{bcolors.ENDC}"
-    lines_str = f"{bcolors.OKGREEN}Lines: {lines_found}{bcolors.ENDC}"
+    reason_str = f"{line_color_start}Reason: {reason}{line_color_end}"
+    date_str = f"{line_color_start}Date: {commit_time}{line_color_end}"
+    hash_str = f"{line_color_start}Hash: {commit_hash}{line_color_end}"
+    file_path = f"{line_color_start}Filepath: {path}{line_color_end}"
+    lines_str = f"{line_color_start}Lines: {lines_found}{line_color_end}"
 
     if mask_secrets:
-        detail_str = f"{bcolors.OKGREEN}DetailedLines: <masked-possible-passwords> {bcolors.ENDC}"
+        detail_str = f"{line_color_start}DetailedLines: <masked-possible-passwords> {line_color_end}"
     else:
-        detail_str = f"{bcolors.OKGREEN}DetailedLines: {detailed_found}{bcolors.ENDC}"
+        detail_str = f"{line_color_start}DetailedLines: {detailed_found}{line_color_end}"
 
     if sys.version_info >= (3, 0):
-        branch_str = f"{bcolors.OKGREEN}Branch: {branch_name}{bcolors.ENDC}"
-        commit_str = f"{bcolors.OKGREEN}Commit: {prev_commit}{bcolors.ENDC}".replace('\n', '')
+        branch_str = f"{line_color_start}Branch: {branch_name}{line_color_end}"
+        commit_str = f"{line_color_start}Commit: {prev_commit}{line_color_end}".replace('\n', '')
         diff = printable_diff if print_diff else '<suppressed>'
-        diff_str = f'{bcolors.OKGREEN}Diff: {diff}{bcolors.ENDC}'
+        diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
     else:
-        branch_str = f"{bcolors.OKGREEN}Branch: {branch_name.encode('utf-8')}{bcolors.ENDC}"
-        commit_str = f"{bcolors.OKGREEN}Commit: {prev_commit.encode('utf-8')}{bcolors.ENDC}".replace('\n', '')
+        branch_str = f"{line_color_start}Branch: {branch_name.encode('utf-8')}{line_color_end}"
+        commit_str = f"{line_color_start}Commit: {prev_commit.encode('utf-8')}{line_color_end}".replace('\n', '')
         diff = printable_diff.encode("utf-8") if print_diff else '<suppressed>'
-        diff_str = f'{bcolors.OKGREEN}Diff: {diff}{bcolors.ENDC}'
+        diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
     output = f'''
     ~~~~~~~~~~~~~~~~~~~~~
-    {reason}
+    {reason_str}
     {date_str}
     {hash_str}
     {file_path}
@@ -540,7 +550,7 @@ def diff_worker(args,
                 if printJson and output_json_stream:
                     print(json.dumps(found_issue, sort_keys=True))
                 if not printJson:
-                    print_results(found_issue, print_diff)
+                    print_results(args.color, found_issue, print_diff)
 
         if len(found_issues) > 0:
             issues.extend(found_issues)

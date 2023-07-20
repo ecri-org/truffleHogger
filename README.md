@@ -38,7 +38,7 @@ New features added:
   - line numbers will be output in both standard output and in json when requested
   - regex checks use same logic as entropy, enabling calculation of line numbers
   - add new arg `--suppress-summary` for those that don't require the summary output (meant to be used with `--json`)
-
+  - add new arg `--color` that allows printing text results in color. This feature was previously the default behavior but has now been made optional
 ## Docker
 
 We build an image that you can use: `docker pull ghcr.io/ecri-org/trufflehogger:latest`
