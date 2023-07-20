@@ -36,7 +36,8 @@ New features added:
   - new arg `--entropy_threshold_hex`, allows tuning of hex threshold, default is set to 3.0.
   - new arg `--length_threshold`, allows specifying the minimum length of words which will be scanned for entropy, default is set to 20.
   - line numbers will be output in both standard output and in json when requested
-  - changed regex routines to use same logic as entropy, enabling calculation of line numbers
+  - regex checks use same logic as entropy, enabling calculation of line numbers
+  - add new arg `--suppress-summary` for those that don't require the summary output (meant to be used with `--json`)
 
 ## Docker
 

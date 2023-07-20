@@ -91,7 +91,8 @@ def summary(args, output):
         # remove found_issues and output (as we streamed the results already)
         del output['foundIssues']
 
-    print(json.dumps(output, sort_keys=True))
+    if args.output_json:
+        print(json.dumps(output, sort_keys=True))
 
     exit_app(exit_code)
 
@@ -133,6 +134,7 @@ def main():
     parser.add_argument("--repo_path", type=str, dest="repo_path",
                         help="Path to the cloned repo. If provided, git_url will not be used")
     parser.add_argument("--print-diff", dest="print_diff", action='store_true', help="Print the diff")
+    parser.add_argument("--suppress-summary", dest="suppress_summary", action='store_true', help="Suppress summary output (meant for ci/cd tools")
 
     # The topic is 'mask_secrets', and the flag 'show-secrets' will mark mask_secrets as false,
     # otherwise we always mask secrets. It makes user interface flags easier to use.
@@ -156,6 +158,7 @@ def main():
     parser.set_defaults(print_diff=False)
     parser.set_defaults(mask_secrets=True)
     parser.set_defaults(output_json_stream=False)
+    parser.set_defaults(suppress_summary=False)
     args = parser.parse_args()
     mask_secrets = args.mask_secrets
 
@@ -217,7 +220,8 @@ def main():
                           output_json_stream=args.output_json_stream
                           )
 
-    summary(args, output)
+    if not args.suppress_summary:
+        summary(args, output)
 
 
 def read_pattern(r):
@@ -229,7 +233,7 @@ def read_pattern(r):
 
 
 def str2bool(v):
-    if v == None:
+    if v is None:
         return True
     if v.lower() in ('yes', 'true', 't', 'y', '1'):
         return True
