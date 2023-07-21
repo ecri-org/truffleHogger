@@ -2,26 +2,56 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import absolute_import
-import shutil
-import sys
-import math
-import datetime
-from enum import Enum
 import argparse
-import uuid
-import hashlib
-import tempfile
-import os
-import re
-import json
-import stat
-from git import Repo
-from git import NULL_TREE
-
+import base64
 import ctypes
+import datetime
+import enum
+import logging
+
+import git
+import glob
+import hashlib
+import json
+import math
+import os
+import pathlib
+import re
+import shutil
+import stat
+import sys
+import tempfile
+import uuid
+
+
+def generate_charset(from_range, to_range):
+    charset = []
+    for ascii_code in range(from_range, to_range):
+        charset.append(chr(ascii_code))
+
+    return ''.join(charset)
+
 
 mask_secrets = True  # this can be removed later after migrating to args
 regexes = {}
+
+# Will be merged with anything provided by the user.
+_exclude_file_patterns = [
+    '.*.htm',  # raw html file, better to check for code that generates this
+    '.*.html',  # raw html file, better to check for code that generates this
+    '.*.css',
+    '.*.gitignore',
+    '.*.git',
+    '.*.lock',
+    '.*.min.js',  # minified files should be excluded
+    '.*/node_modules/.*',  # don't do depenedency checks ...
+    '.*.pyc',
+    '(?:\.min|[-.]min|\\bmin\\b|\\bcompressed\\b|[_-]minified[_-])\.[a-zA-Z]+$'  # common minified patterns
+]
+exclude_file_patterns = [re.compile(pattern) for pattern in _exclude_file_patterns]
+
+SECRET_CHARSET = generate_charset(33, 127)
+HEX_CHARS = "1234567890abcdefABCDEF"
 
 
 def load_regexes():
@@ -35,7 +65,7 @@ def load_regexes():
     return regex_list
 
 
-class ExitCode(Enum):
+class ExitCode(enum.Enum):
     FOUND_NONE = 0
     FOUND_ENTROPY = 1
     FOUND_REGEX = 2
@@ -97,6 +127,147 @@ def summary(args, output):
     exit_app(exit_code)
 
 
+def has_minified_whitespace(file_contents, threshold=0.08):
+    whitespace_count = len(re.findall(r'\s', file_contents))
+
+    if len(file_contents) <= 0:
+        whitespace_ratio = 0
+    else:
+        whitespace_ratio = whitespace_count / len(file_contents)
+
+    return whitespace_ratio < threshold
+
+
+# Not accurate
+def has_short_variable_names(file_contents, threshold_length=2):
+    variable_names = re.findall(r'\b\w{1,' + str(threshold_length) + r'}\b', file_contents)
+    return len(variable_names) > 0
+
+
+# Not accurate, i.e. printing tables, though one should do it programmatically...
+def has_repeated_characters(file_contents, threshold_repeats=5):
+    repeated_chars = re.findall(r'(\S)\1{' + str(threshold_repeats - 1) + r',}', file_contents)
+    return len(repeated_chars) > 0
+
+
+# Not accurate
+def has_short_string_literals(file_contents, threshold_length=3):
+    string_literals = re.findall(r'["\'][\S\s]{1,' + str(threshold_length - 1) + r'}["\']', file_contents)
+    return len(string_literals) > 0
+
+
+# Not accurate
+def has_single_line_structure(file_contents, threshold_lines=2):
+    line_count = len(file_contents.splitlines())
+    return line_count <= threshold_lines
+
+
+# a very low threshold, where minified has hardly ANY
+# i.e. values as low as 0.0008
+def has_low_comment_ratio(file_contents, threshold=0.01, comment_patterns=None):
+    # Combine all comment patterns into a single regex pattern
+    # all_comment_patterns = '|'.join([f'({pattern})' for pattern in comment_patterns])
+    # Combine all multi-line comment patterns into a single regex pattern
+    # all_multi_line_comment_patterns = '|'.join([f'({pattern})' for pattern in multi_line_comment_patterns])
+    comment_patterns_combined = [
+        r'//.*',                          # JavaScript, Java, C, C++
+        r'(\'\'\'|""")[\s\S]*?\1',        # Python
+        r'--.*',                          # SQL, Lua
+        r'=begin[\s\S]*?=end',            # Ruby
+        r'<!--.*?-->',                    # HTML/XML
+        r'/\*[\s\S]*?\*/',                # Multi-line C Style
+        r'#.*',                           # Bash/Shell, PHP, Single line Perl
+        r'=pod[\s\S]*?=cut',              # Multi-line Perl POD comments
+        r'(?<!\\)\#.*',                   # Single-line C-style comments in Perl
+        r'\-\-\[\[\s\S]*?\]\]'            # Multi-line Lua comments
+    ]
+
+    if comment_patterns is None:
+        comment_patterns = comment_patterns_combined
+
+    # Combine all comment patterns into a single regex pattern
+    all_comment_patterns = '|'.join([f'({pattern})' for pattern in comment_patterns_combined])
+
+    # Remove all comments from the content
+    content_without_comments = re.sub(all_comment_patterns, '', file_contents)
+
+    if len(file_contents) <= 0:
+        comment_ratio = 0
+    else:
+        # Calculate the ratio of comments to total characters
+        comment_ratio = (len(file_contents) - len(content_without_comments)) / len(file_contents)
+
+    # Check if the comment ratio is below the threshold
+    # print(comment_ratio)
+    return comment_ratio < threshold
+
+
+# try and ensure file_data is the entire file
+def human_readable_code(file_contents, threshold=0.8):
+    '''
+    There are numerous ways to detect minified code, none and all would only give you an idea. The techniques below
+    coupled with a generic regex rule we use above can help.
+
+    Comment-to-Code Ratio: Minified code typically removes or significantly reduces the number of comments to reduce
+    file size. One can check the ratio of comments to the total code length to identify whether the content might be minified.
+
+    Whitespace Detection: Minified code often lacks whitespace characters, such as spaces, tabs, and line breaks.
+    One can check for the presence of whitespace in the code. For example, you can count the number of whitespace
+    characters and calculate the whitespace ratio.
+
+    Variable Name Length: Minified code tends to use shorter variable and function names to reduce the file size.
+    One can check if the code contains a significant number of single-character or very short variable names.
+
+    Repeated Characters: Minified code might use repeated characters, such as ';;;;;' or '////'.
+    One can check for the presence of multiple repeated characters in a row.
+
+    Function Argument Names: Minified code may use shortened function argument names like 'a', 'b', 'c', etc.
+    One can check for the prevalence of single-letter argument names.
+
+    String Literal Length: Minified code often shortens string literals to save space.
+    One can check if there are many very short string literals.
+
+    Code Structure: Minified code is often written in a single line or has very few line breaks.
+    One can check the number of lines in the code and the average length of the lines.
+    '''
+
+    pattern = [
+        has_minified_whitespace(file_contents),
+        # has_short_variable_names(file_contents),  # not accurate
+        # has_repeated_characters(file_contents),   # not accurate
+        # has_short_string_literals(file_contents), # not accurate
+        # has_single_line_structure(file_contents), # not accurate
+        has_low_comment_ratio(file_contents)
+    ]
+
+    if pattern == [True, True]:
+        return False
+
+    return True
+
+
+def display_info(args):
+    if not args.output_json:
+        labels = {
+            "git_url": "Git Url",
+            "human_readable_only": "Human Readable Only",
+            "entropy_threshold": "Entropy Threshold",
+            "max_line_length": "Max Line Length",
+            "print_diff": "Print Diff",
+            "mask_secrets": "Show Secrets"
+        }
+
+        max_label_length = max(len(label) for label in labels.values())
+
+        msg = "---------------------------------------------------------------\n"
+        for arg_name, label in labels.items():
+            value = getattr(args, arg_name)
+            msg += f"    {label.ljust(max_label_length)}: {value}\n"
+        msg += "---------------------------------------------------------------\n"
+
+        print(msg)
+
+
 def main():
     global mask_secrets
     global regexes
@@ -111,15 +282,17 @@ def main():
     parser.add_argument("--length_threshold", dest="length_threshold", type=int,
                         help="minimum length of any 'word' to be scanned for entropy. Default is [19].")
     parser.add_argument("--entropy", dest="do_entropy", help="Enable entropy checks")
-    parser.add_argument("--entropy_threshold_base64", type=float, dest="entropy_threshold_base64",
-                        help="desired threshold when using a base64 set for randomness, "
-                             "accepts values between 0.0 (low) and 8.0 (high). Default is [4.5].")
+    parser.add_argument("--entropy_threshold", type=float, dest="entropy_threshold",
+                        help="desired threshold when using a typical password character set for randomness, "
+                             "accepts values between 0.0 (low) and 8.0 (high). Default is [5.5].")
     parser.add_argument("--entropy_threshold_hex", type=float, dest="entropy_threshold_hex",
                         help="desired threshold when using hex code set for randomness, "
                              "accepts values between 0.0 (low) and 8.0 (high). Default is [3.0]")
     parser.add_argument("--since_commit", dest="since_commit", help="Only scan from a given commit hash")
     parser.add_argument("--max_depth", dest="max_depth",
                         help="The max commit depth to go back when searching for secrets")
+    parser.add_argument("--max_line_length_threshold", dest="max_line_length",
+                        help="The max line length to consider, anything longer than this must not be human readable (minified code)")
     parser.add_argument("--branch", dest="branch", help="Name of the branch to be scanned")
     parser.add_argument('-i', '--include_paths', type=argparse.FileType('r'), metavar='INCLUDE_PATHS_FILE',
                         help='File with regular expressions (one per line), at least one of which must match a Git '
@@ -134,8 +307,10 @@ def main():
     parser.add_argument("--repo_path", type=str, dest="repo_path",
                         help="Path to the cloned repo. If provided, git_url will not be used")
     parser.add_argument("--print-diff", dest="print_diff", action='store_true', help="Print the diff")
-    parser.add_argument("--suppress-summary", dest="suppress_summary", action='store_true', help="Suppress summary output (meant for ci/cd tools")
-
+    parser.add_argument("--suppress-summary", dest="suppress_summary", action='store_true',
+                        help="Suppress summary output (meant for ci/cd tools")
+    parser.add_argument("--human-readable-only", dest="human_readable_only", action='store_true',
+                        help="Try to only analyze human readable files - WARNING not accurate")
     # The topic is 'mask_secrets', and the flag 'show-secrets' will mark mask_secrets as false,
     # otherwise we always mask secrets. It makes user interface flags easier to use.
     parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false',
@@ -150,10 +325,12 @@ def main():
     parser.set_defaults(rules={})
     parser.set_defaults(allow={})
     parser.set_defaults(max_depth=1000000)
+    parser.set_defaults(max_line_length=500)
     parser.set_defaults(since_commit=None)
     parser.set_defaults(length_threshold=20)
     parser.set_defaults(entropy=True)
-    parser.set_defaults(entropy_threshold_base64=4.5)
+    # parser.set_defaults(entropy_threshold_base64=4.5)
+    parser.set_defaults(entropy_threshold=5.5)
     parser.set_defaults(entropy_threshold_hex=3.0)
     parser.set_defaults(branch=None)
     parser.set_defaults(repo_path=None)
@@ -161,9 +338,13 @@ def main():
     parser.set_defaults(mask_secrets=True)
     parser.set_defaults(output_json_stream=False)
     parser.set_defaults(suppress_summary=False)
+    parser.set_defaults(human_readable_only=False)
     parser.set_defaults(color=False)
+
     args = parser.parse_args()
     mask_secrets = args.mask_secrets
+
+    display_info(args)
 
     if args.do_regex:
         regexes = load_regexes()
@@ -176,7 +357,7 @@ def main():
                 for rule in rules:
                     rules[rule] = re.compile(rules[rule])
         except (IOError, ValueError) as e:
-            raise("Error reading rules file")
+            raise ("Error reading rules file")
 
         for regex in dict(regexes):
             del regexes[regex]
@@ -190,13 +371,14 @@ def main():
                 for rule in allow:
                     allow[rule] = read_pattern(allow[rule])
         except (IOError, ValueError) as e:
-            raise("Error reading allow file")
+            raise ("Error reading allow file")
 
     do_entropy = str2bool(args.do_entropy)
 
     # read & compile path inclusion/exclusion patterns
     path_inclusions = []
-    path_exclusions = []
+    path_exclusions = exclude_file_patterns
+
     if args.include_paths:
         for pattern in set(line[:-1].lstrip() for line in args.include_paths):
             if pattern and not pattern.startswith('#'):
@@ -246,10 +428,6 @@ def str2bool(v):
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
 
-BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-HEX_CHARS = "1234567890abcdefABCDEF"
-
-
 def del_rw(action, name, exc):
     os.chmod(name, stat.S_IWRITE)
     os.remove(name)
@@ -267,9 +445,9 @@ def shannon_entropy(data, iterator):
         return 0
     entropy = 0
     for x in iterator:
-        p_x = float(data.count(x))/len(data)
+        p_x = float(data.count(x)) / len(data)
         if p_x > 0:
-            entropy += - p_x*math.log(p_x, 2)
+            entropy += - p_x * math.log(p_x, 2)
     return entropy
 
 
@@ -304,7 +482,7 @@ class bcolors:
 
 def clone_git_repo(git_url):
     project_path = tempfile.mkdtemp()
-    Repo.clone_from(git_url, project_path)
+    git.Repo.clone_from(git_url, project_path)
     return project_path
 
 
@@ -393,7 +571,7 @@ def get_hunk_values(diff):
     return curr_line, index_correction, original_start, original_count, prefix
 
 
-def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff):
+def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, file_path, print_diff):
     strings_found = []
     line_numbers_found = []
     threshold = args.length_threshold
@@ -401,15 +579,21 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
 
     for index, line in enumerate(printable_diff.split("\n")):
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
+            # the next line in the hunk is the start of the 0 index
+            curr_line = (original_start - index_correction) + index
+
+        # if any line is larger than the max_line_length, ignore it. Most likely not human-readable
+        # and could be minified
+        if len(line) > args.max_line_length:
+            continue
 
         for word in line.split():
-            base64_strings = get_strings_of_set(word, BASE64_CHARS, threshold)
+            base64_strings = get_strings_of_set(word, SECRET_CHARSET, threshold)
             hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
 
             for string in base64_strings:
-                b64_entropy = shannon_entropy(string, BASE64_CHARS)
-                if b64_entropy > args.entropy_threshold_base64:
+                b64_entropy = shannon_entropy(string, SECRET_CHARSET)
+                if b64_entropy > args.entropy_threshold:
                     secret = mask(string)
                     strings_found.append(secret)
                     line_numbers_found.append(curr_line)
@@ -428,7 +612,7 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
         entropic_diff = {}
         _commit = prev_commit.message
         entropic_diff['date'] = commit_time
-        entropic_diff['path'] = blob.b_path if blob.b_path else blob.a_path
+        entropic_diff['path'] = file_path
         entropic_diff['branch'] = branch_name
         entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
         # please rely on printDiff as that is masked
@@ -453,7 +637,7 @@ def zipEntries(lines, strings, annotate=True):
     return [f'L{x}:{y}' for x, y in zipped]
 
 
-def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes={}):
+def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, file_path, custom_regexes={}):
     strings_found = []
     line_numbers_found = []
     regex_matches = []
@@ -468,7 +652,8 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
 
     for index, line in enumerate(printable_diff.split("\n")):
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-            curr_line = (original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
+            curr_line = (
+                                original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
 
         for key in secret_regexes:
             found_strings = re.findall(secret_regexes[key], line)
@@ -484,14 +669,15 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
         foundRegex = {}
         _commit = prev_commit.message
         foundRegex['date'] = commit_time
-        foundRegex['path'] = blob.b_path if blob.b_path else blob.a_path
+        foundRegex['path'] = file_path
         foundRegex['branch'] = branch_name
         foundRegex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
         # please rely on printDiff as that is masked
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
         foundRegex['stringsFound'] = strings_found  # already has masked strings, don't remask
         foundRegex['linesFound'] = line_numbers_found  # lines where hits found
-        foundRegex['secretTypesFound'] = zipEntries(line_numbers_found, zipEntries(secret_types_found, strings_found, annotate=False))
+        foundRegex['secretTypesFound'] = zipEntries(line_numbers_found,
+                                                    zipEntries(secret_types_found, strings_found, annotate=False))
         foundRegex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
         foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
         foundRegex['commitHash'] = prev_commit.hexsha
@@ -500,7 +686,9 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
 
     return regex_matches
 
+
 def diff_worker(args,
+                repo,
                 diff,
                 curr_commit,
                 prev_commit,
@@ -522,10 +710,25 @@ def diff_worker(args,
 
     for blob in diff:
         printable_diff = blob.diff.decode('utf-8', errors='replace')
+        file_path = blob.b_path if blob.b_path else blob.a_path
+
         if printable_diff.startswith("Binary files"):
             continue
-        if not path_included(blob, path_inclusions, path_exclusions):
+        if not include_path(blob, path_inclusions, path_exclusions):
             continue
+
+        # Human readable?
+        repo_commit = repo.commit(prev_commit)
+        repo_curr_commit = repo.commit(commitHash)
+
+        if blob.deleted_file:
+            file_contents = repo_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace')
+        else:
+            file_contents = repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace')
+
+        if args.human_readable_only and not human_readable_code(file_contents):
+            continue
+
         for key in allow:
             printable_diff = allow[key].sub('', printable_diff)
 
@@ -534,13 +737,27 @@ def diff_worker(args,
         found_issues = []
 
         if do_entropy:
-            entropic_diff = find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff)
+            entropic_diff = find_entropy(args,
+                                         printable_diff,
+                                         commit_time,
+                                         branch_name,
+                                         prev_commit,
+                                         blob,
+                                         file_path,
+                                         print_diff)
             if entropic_diff:
                 found_issues.append(entropic_diff)
                 count_entropy += 1
 
         if do_regex:
-            found_regexes = regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, custom_regexes)
+            found_regexes = regex_check(printable_diff,
+                                        commit_time,
+                                        branch_name,
+                                        prev_commit,
+                                        blob,
+                                        print_diff,
+                                        file_path,
+                                        custom_regexes)
             if len(found_regexes):
                 found_issues += found_regexes
                 count_regex += len(found_regexes)
@@ -558,7 +775,7 @@ def diff_worker(args,
     return issues, count_entropy, count_regex
 
 
-def path_included(blob, include_patterns=None, exclude_patterns=None):
+def include_path(blob, include_patterns=None, exclude_patterns=None):
     """Check if the diff blob object should included in analysis.
 
     If defined and non-empty, `include_patterns` has precedence over `exclude_patterns`, such that a blob that is not
@@ -600,7 +817,6 @@ def find_strings(args,
                  allow={},
                  print_diff=True,
                  output_json_stream=False):
-
     output = {"foundIssues": [], "countEntropy": 0, "countRegex": 0}
 
     if repo_path:
@@ -608,7 +824,7 @@ def find_strings(args,
     else:
         project_path = clone_git_repo(git_url)
 
-    repo = Repo(project_path)
+    repo = git.Repo(project_path)
     already_searched = set()
 
     if branch:
@@ -621,11 +837,14 @@ def find_strings(args,
         branch_name = remote_branch.name
         friendly_branch_name = f'origin/{branch}' if remote_branch.name == 'FETCH_HEAD' else remote_branch.name
         prev_commit = None
+
         for curr_commit in repo.iter_commits(branch_name, max_count=max_depth):
             commitHash = curr_commit.hexsha
+
             if commitHash == since_commit:
                 since_commit_reached = True
                 break
+
             # if not prev_commit, then curr_commit is the newest commit. And we have nothing to diff with.
             # But we will diff the first commit with NULL_TREE here to check the oldest code.
             # In this way, no commit will be missed.
@@ -638,11 +857,13 @@ def find_strings(args,
                 continue
             else:
                 diff = prev_commit.diff(curr_commit, create_patch=True)
+
             # avoid searching the same diffs
             already_searched.add(diff_hash)
 
             found_issues, count_entropy, count_regex = diff_worker(
                 args,
+                repo,
                 diff,
                 curr_commit,
                 prev_commit,
@@ -674,10 +895,11 @@ def find_strings(args,
                 continue
             diff = prev_commit.diff(curr_commit, create_patch=True)
         else:
-            diff = curr_commit.diff(NULL_TREE, create_patch=True)
+            diff = curr_commit.diff(git.NULL_TREE, create_patch=True)
 
         found_issues, count_entropy, count_regex = diff_worker(
             args,
+            repo,
             diff,
             curr_commit,
             prev_commit,
@@ -699,7 +921,14 @@ def find_strings(args,
             output['countEntropy'] += count_entropy
             output['countRegex'] += count_regex
 
-    output["cloneUri"] = git_url
+    output['args'] = {
+        "human_readable_only": args.human_readable_only,
+        "entropy_threshold": args.entropy_threshold,
+        "max_line_length": args.max_line_length,
+        "print_diff": args.print_diff,
+        "mask_secrets": args.mask_secrets,
+        "git_url": args.git_url
+    }
 
     if not repo_path:
         shutil.rmtree(project_path, onerror=del_rw)
