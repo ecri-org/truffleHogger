@@ -13,7 +13,7 @@ setup(
     author_email='jgiedymin@ecri.org',
     license='GNU',
     packages=['truffleHogger'],
-    package_data={'': ['regexes.json']},
+    package_data={'': ['regexes.json', 'ignore.json']},
     install_requires=[
         'GitPython == 3.0.6'
     ],

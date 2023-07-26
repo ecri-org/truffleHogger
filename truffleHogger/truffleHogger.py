@@ -2,26 +2,21 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import absolute_import
+
 import argparse
-import base64
 import ctypes
 import datetime
 import enum
-import logging
-
 import git
-import glob
 import hashlib
 import json
 import math
 import os
-import pathlib
 import re
 import shutil
 import stat
 import sys
 import tempfile
-import uuid
 
 
 def generate_charset(from_range, to_range):
@@ -32,37 +27,27 @@ def generate_charset(from_range, to_range):
     return ''.join(charset)
 
 
-mask_secrets = True  # this can be removed later after migrating to args
-regexes = {}
-
 # Will be merged with anything provided by the user.
-_exclude_file_patterns = [
-    '.*.htm',  # raw html file, better to check for code that generates this
-    '.*.html',  # raw html file, better to check for code that generates this
-    '.*.css',
-    '.*.gitignore',
-    '.*.git',
-    '.*.lock',
-    '.*.min.js',  # minified files should be excluded
-    '.*/node_modules/.*',  # don't do depenedency checks ...
-    '.*.pyc',
-    '(?:\.min|[-.]min|\\bmin\\b|\\bcompressed\\b|[_-]minified[_-])\.[a-zA-Z]+$'  # common minified patterns
-]
-exclude_file_patterns = [re.compile(pattern) for pattern in _exclude_file_patterns]
-
 SECRET_CHARSET = generate_charset(33, 127)
 HEX_CHARS = "1234567890abcdefABCDEF"
 
 
-def load_regexes():
-    regex_list = {}
-    with open(os.path.join(os.path.dirname(__file__), "regexes.json"), 'r') as f:
-        regex_list = json.loads(f.read())
+def process_pattern_list(paths, pattern_list=[], comment='#'):
+    for pattern in set(line[:-1].lstrip() for line in paths):
+        if pattern and not pattern.startswith(comment):
+            pattern_list.append(re.compile(pattern))
+    return pattern_list
 
-    for key in regexes:
-        regex_list[key] = re.compile(regex_list[key])
 
-    return regex_list
+def load_regexes(args, file_path="regexes.json"):
+    regexes = {}
+
+    with open(os.path.join(os.path.dirname(__file__), file_path), 'r') as f:
+        file = json.loads(f.read())
+        for key, pattern in file.items():
+            regexes[key] = re.compile(pattern)
+
+    return regexes
 
 
 class ExitCode(enum.Enum):
@@ -82,16 +67,15 @@ def zero_out(variable):
     del variable
 
 
-def mask(value):
+def mask(should_mask, value):
     """
     I normally don't like to use global, but we're passing vars all the way down multiple levels.
     If I were to rewrite this I'd consider a config object to pass params rather than all these
     vars.
     """
-    global mask_secrets
     masked_string_placeholder = "<masked-possible-password>"
 
-    if mask_secrets:
+    if should_mask:
         if isinstance(value, list):
             return [masked_string_placeholder for _ in value]
         return masked_string_placeholder
@@ -156,12 +140,6 @@ def has_short_string_literals(file_contents, threshold_length=3):
     return len(string_literals) > 0
 
 
-# Not accurate
-def has_single_line_structure(file_contents, threshold_lines=2):
-    line_count = len(file_contents.splitlines())
-    return line_count <= threshold_lines
-
-
 # a very low threshold, where minified has hardly ANY
 # i.e. values as low as 0.0008
 def has_low_comment_ratio(file_contents, threshold=0.01, comment_patterns=None):
@@ -170,7 +148,7 @@ def has_low_comment_ratio(file_contents, threshold=0.01, comment_patterns=None):
     # Combine all multi-line comment patterns into a single regex pattern
     # all_multi_line_comment_patterns = '|'.join([f'({pattern})' for pattern in multi_line_comment_patterns])
     comment_patterns_combined = [
-        r'//.*',                          # JavaScript, Java, C, C++
+        r'//(?!https?://|ftp://|sftp://).*',  # JavaScript, Java, C, C++
         r'(\'\'\'|""")[\s\S]*?\1',        # Python
         r'--.*',                          # SQL, Lua
         r'=begin[\s\S]*?=end',            # Ruby
@@ -202,8 +180,27 @@ def has_low_comment_ratio(file_contents, threshold=0.01, comment_patterns=None):
     return comment_ratio < threshold
 
 
+def minified_source_map(file_contents, regex=r'.*js.map'):
+    found = re.findall(regex, file_contents)
+    return len(found) > 0
+
+
+# Not accurate
+def has_single_line_structure(file_contents, threshold_lines=2):
+    line_count = len(file_contents.splitlines())
+    return line_count <= threshold_lines
+
+
+def has_single_line(file_contents):
+    return len(file_contents.split('\n')) == 1
+
+
+def has_long_single_first_line(file_contents, line_length_threshold=500):
+    return len(file_contents.split('\n')[0]) > line_length_threshold
+
+
 # try and ensure file_data is the entire file
-def human_readable_code(file_contents, threshold=0.8):
+def human_readable_code(args, file_contents):
     '''
     There are numerous ways to detect minified code, none and all would only give you an idea. The techniques below
     coupled with a generic regex rule we use above can help.
@@ -231,22 +228,34 @@ def human_readable_code(file_contents, threshold=0.8):
     One can check the number of lines in the code and the average length of the lines.
     '''
 
-    pattern = [
+    # has_short_variable_names(file_contents),  # not accurate
+    # has_repeated_characters(file_contents),   # not accurate
+    # has_short_string_literals(file_contents), # not accurate
+    # has_single_line_structure(file_contents), # not accurate
+    structure_pattern = [
         has_minified_whitespace(file_contents),
-        # has_short_variable_names(file_contents),  # not accurate
-        # has_repeated_characters(file_contents),   # not accurate
-        # has_short_string_literals(file_contents), # not accurate
-        # has_single_line_structure(file_contents), # not accurate
-        has_low_comment_ratio(file_contents)
+        has_low_comment_ratio(file_contents),
+        has_single_line(file_contents),
+        has_long_single_first_line(file_contents, args.max_line_length),
+        minified_source_map(file_contents)
     ]
 
-    if pattern == [True, True]:
-        return False
+    match structure_pattern:
+        case [True, True, _, True]:       # no white space, low comments, and a long first line
+            return False, structure_pattern
+        case [True, True, False, False]:  # no white space, low comments, no single line attrs
+            return False, structure_pattern
+        case [True, _, _, True, _]:       # no white space, but has a long single line
+            return False, structure_pattern
+        case [_, _, True, True]:          # single line attrs
+            return False, structure_pattern
+        case [_, _, _, _, True]:          # has source map at end
+            return False, structure_pattern
+        case _:
+            return True, structure_pattern
 
-    return True
 
-
-def display_info(args):
+def display_info(args, path_inclusions, path_exclusions):
     if not args.output_json:
         labels = {
             "git_url": "Git Url",
@@ -263,15 +272,25 @@ def display_info(args):
         for arg_name, label in labels.items():
             value = getattr(args, arg_name)
             msg += f"    {label.ljust(max_label_length)}: {value}\n"
+        msg += f"    Path inclusions    : {[k for k in path_inclusions]}\n"
+        msg += f"    Path exclusions    : {[k for k in path_exclusions]}\n"
         msg += "---------------------------------------------------------------\n"
 
         print(msg)
 
 
-def main():
-    global mask_secrets
-    global regexes
+def read_file_entries(file, compiled_dict={}):
+    try:
+        with open(file, "r") as entryFile:
+            compiled_dict = json.loads(entryFile.read())
+            for entry in compiled_dict:
+                compiled_dict[entry] = re.compile(compiled_dict[entry])
+        return compiled_dict
+    except (IOError, ValueError) as e:
+        raise f'Error reading entry file {file}'
 
+
+def main():
     parser = argparse.ArgumentParser(description='Find secrets hidden in the depths of git.')
     parser.add_argument('--json', dest="output_json", action="store_true", help="Output in JSON")
     parser.add_argument('--json-streaming', dest="output_json_stream", action="store_true",
@@ -310,7 +329,9 @@ def main():
     parser.add_argument("--suppress-summary", dest="suppress_summary", action='store_true',
                         help="Suppress summary output (meant for ci/cd tools")
     parser.add_argument("--human-readable-only", dest="human_readable_only", action='store_true',
-                        help="Try to only analyze human readable files - WARNING not accurate")
+                        help="Try to only analyze human readable files - WARNING: VERY SLOW and sometimes not accurate")
+    parser.add_argument("--show-hr-ignored-files", dest="show_hr_ignored_files", action='store_true',
+                        help="Show files that are ignored as not human readable or files that don't pass our human readable tests")
     # The topic is 'mask_secrets', and the flag 'show-secrets' will mark mask_secrets as false,
     # otherwise we always mask secrets. It makes user interface flags easier to use.
     parser.add_argument("--show-secrets", dest="mask_secrets", action='store_false',
@@ -321,7 +342,7 @@ def main():
     parser.add_argument('git_url', type=str, help='URI to use use in the form of URI'
                                                   'such as https|git|file _OR_ local path (i.e. /some/path)')
 
-    parser.set_defaults(regex=False)
+    parser.set_defaults(do_regex=False)
     parser.set_defaults(rules={})
     parser.set_defaults(allow={})
     parser.set_defaults(max_depth=1000000)
@@ -339,54 +360,31 @@ def main():
     parser.set_defaults(output_json_stream=False)
     parser.set_defaults(suppress_summary=False)
     parser.set_defaults(human_readable_only=False)
+    parser.set_defaults(show_hr_ignored_files=False)
     parser.set_defaults(color=False)
+    parser.set_defaults(regexes={})
 
+    path_inclusions = path_exclusions = []
     args = parser.parse_args()
-    mask_secrets = args.mask_secrets
 
-    display_info(args)
-
+    rules = allow = {}
     if args.do_regex:
-        regexes = load_regexes()
-
-    rules = {}
-    if args.rules:
-        try:
-            with open(args.rules, "r") as ruleFile:
-                rules = json.loads(ruleFile.read())
-                for rule in rules:
-                    rules[rule] = re.compile(rules[rule])
-        except (IOError, ValueError) as e:
-            raise ("Error reading rules file")
-
-        for regex in dict(regexes):
-            del regexes[regex]
-        for regex in rules:
-            regexes[regex] = rules[regex]
-    allow = {}
+        args.regexes = load_regexes(args, "regexes.json")
+    if args.rules:  # when rules source regex from file, ignore ALL preset seeded rules
+        rules = read_file_entries(args.rules, {})
+        for regex in args.regexes.copy():
+            del args.regexes[regex]
+        args.regexes.update(rules)
     if args.allow:
-        try:
-            with open(args.allow, "r") as allowFile:
-                allow = json.loads(allowFile.read())
-                for rule in allow:
-                    allow[rule] = read_pattern(allow[rule])
-        except (IOError, ValueError) as e:
-            raise ("Error reading allow file")
-
-    do_entropy = str2bool(args.do_entropy)
-
-    # read & compile path inclusion/exclusion patterns
-    path_inclusions = []
-    path_exclusions = exclude_file_patterns
-
+        allow = read_file_entries(args.allow, {})
     if args.include_paths:
-        for pattern in set(line[:-1].lstrip() for line in args.include_paths):
-            if pattern and not pattern.startswith('#'):
-                path_inclusions.append(re.compile(pattern))
+        path_inclusions = process_pattern_list(args.include_paths)
     if args.exclude_paths:
-        for pattern in set(line[:-1].lstrip() for line in args.exclude_paths):
-            if pattern and not pattern.startswith('#'):
-                path_exclusions.append(re.compile(pattern))
+        path_exclusions = process_pattern_list(args.exclude_paths)
+    else:
+        path_exclusions = load_regexes(args, "ignore.json")
+
+    display_info(args, path_inclusions, path_exclusions)
 
     output = find_strings(args,
                           args.git_url,
@@ -394,8 +392,7 @@ def main():
                           args.max_depth,
                           args.output_json,
                           args.do_regex,
-                          do_entropy,
-                          surpress_output=False,
+                          str2bool(args.do_entropy),
                           branch=args.branch,
                           repo_path=args.repo_path,
                           path_inclusions=path_inclusions,
@@ -486,10 +483,8 @@ def clone_git_repo(git_url):
     return project_path
 
 
-def print_results(color, issue, print_diff):
-    global mask_secrets
-
-    if color:
+def print_results(args, issue, print_diff):
+    if args.color:
         line_color_start = bcolors.OKGREEN
         line_color_end = bcolors.ENDC
     else:
@@ -503,6 +498,8 @@ def print_results(color, issue, print_diff):
     commit_hash = issue['commitHash']
     lines_found = issue['linesFound']
     detailed_found = issue['detailedFound']
+    if 'secretTypesFound' in issue.keys():
+        secrettypes_found = issue['secretTypesFound']
     reason = issue['reason']
     path = issue['path']
 
@@ -512,7 +509,7 @@ def print_results(color, issue, print_diff):
     file_path = f"{line_color_start}Filepath: {path}{line_color_end}"
     lines_str = f"{line_color_start}Lines: {lines_found}{line_color_end}"
 
-    if mask_secrets:
+    if args.mask_secrets:
         detail_str = f"{line_color_start}DetailedLines: <masked-possible-passwords> {line_color_end}"
     else:
         detail_str = f"{line_color_start}DetailedLines: {detailed_found}{line_color_end}"
@@ -529,17 +526,15 @@ def print_results(color, issue, print_diff):
         diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
     output = f'''
-    ~~~~~~~~~~~~~~~~~~~~~
-    {reason_str}
-    {date_str}
-    {hash_str}
     {file_path}
-    {branch_str}
-    {lines_str}
-    {detail_str}
-    {commit_str[0:65]}
-    {diff_str}
-    ~~~~~~~~~~~~~~~~~~~~~
+        {reason_str}
+        {date_str}
+        {hash_str}
+        {branch_str}
+        {lines_str}
+        {secrettypes_found if reason == 'Regex' else detail_str}
+        {commit_str[0:65]}
+        {diff_str}
     '''
 
     print(output)
@@ -574,6 +569,7 @@ def get_hunk_values(diff):
 def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, file_path, print_diff):
     strings_found = []
     line_numbers_found = []
+    entropy_values = []
     threshold = args.length_threshold
     curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
@@ -582,31 +578,32 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
             # the next line in the hunk is the start of the 0 index
             curr_line = (original_start - index_correction) + index
 
-        # if any line is larger than the max_line_length, ignore it. Most likely not human-readable
-        # and could be minified
-        if len(line) > args.max_line_length:
-            continue
-
         for word in line.split():
             base64_strings = get_strings_of_set(word, SECRET_CHARSET, threshold)
             hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
 
             for string in base64_strings:
-                b64_entropy = shannon_entropy(string, SECRET_CHARSET)
-                if b64_entropy > args.entropy_threshold:
-                    secret = mask(string)
+                entropy_value = shannon_entropy(string, SECRET_CHARSET)
+                if entropy_value > args.entropy_threshold:
+                    secret = mask(args.mask_secrets, string)
                     strings_found.append(secret)
+                    entropy_values.append(entropy_value)
                     line_numbers_found.append(curr_line)
-                    printable_diff = printable_diff.replace(string,
-                                                            bcolors.WARNING + mask(string) + bcolors.ENDC)
+                    printable_diff = printable_diff.replace(
+                        string,
+                        bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
+                    )
             for string in hex_strings:
                 hex_entropy = shannon_entropy(string, HEX_CHARS)
                 if hex_entropy > args.entropy_threshold_hex:
-                    secret = mask(string)
+                    secret = mask(args.mask_secrets, string)
                     strings_found.append(secret)
+                    entropy_values.append(entropy_value)
                     line_numbers_found.append(curr_line)
-                    printable_diff = printable_diff.replace(string,
-                                                            bcolors.WARNING + mask(string) + bcolors.ENDC)
+                    printable_diff = printable_diff.replace(
+                        string,
+                        bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
+                    )
 
     if len(strings_found) > 0:
         entropic_diff = {}
@@ -619,7 +616,11 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
         entropic_diff['stringsFound'] = strings_found  # already has masked strings, don't remask
         entropic_diff['linesFound'] = line_numbers_found  # lines where hits found
-        entropic_diff['detailedFound'] = zipEntries(line_numbers_found, strings_found)
+        entropic_diff['detailedFound'] = zipEntries(
+            zipEntries(line_numbers_found, entropy_values),
+            strings_found,
+            False
+        )
         entropic_diff['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
         entropic_diff['commitHash'] = prev_commit.hexsha
         entropic_diff['reason'] = "High Entropy"
@@ -631,13 +632,13 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
 def zipEntries(lines, strings, annotate=True):
     zipped = zip(lines, strings)
 
-    if not annotate:
-        return [f'{x}:{y}' for x, y in zipped]
+    if annotate:
+        return [f'L{x}:{y}' for x, y in zipped]
 
-    return [f'L{x}:{y}' for x, y in zipped]
+    return [f'{x}:{y}' for x, y in zipped]
 
 
-def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, file_path, custom_regexes={}):
+def regex_check(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, file_path, custom_regexes={}):
     strings_found = []
     line_numbers_found = []
     regex_matches = []
@@ -646,20 +647,20 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
     if custom_regexes:
         secret_regexes = custom_regexes
     else:
-        secret_regexes = regexes
+        secret_regexes = args.regexes
 
     curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
     for index, line in enumerate(printable_diff.split("\n")):
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-            curr_line = (
-                                original_start - index_correction) + index  # the next line in the hunk is the start of the 0 index
+            # the next line in the hunk is the start of the 0 index
+            curr_line = (original_start - index_correction) + index
 
         for key in secret_regexes:
             found_strings = re.findall(secret_regexes[key], line)
 
             for found_string in found_strings:
-                secret = mask(found_string)
+                secret = mask(args.mask_secrets, found_string)
                 found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
                 strings_found.append(secret)
                 secret_types_found.append(key)
@@ -676,12 +677,14 @@ def regex_check(printable_diff, commit_time, branch_name, prev_commit, blob, pri
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
         foundRegex['stringsFound'] = strings_found  # already has masked strings, don't remask
         foundRegex['linesFound'] = line_numbers_found  # lines where hits found
-        foundRegex['secretTypesFound'] = zipEntries(line_numbers_found,
-                                                    zipEntries(secret_types_found, strings_found, annotate=False))
+        foundRegex['secretTypesFound'] = zipEntries(
+            zipEntries(line_numbers_found, secret_types_found),
+            strings_found,
+        )
         foundRegex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
         foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
         foundRegex['commitHash'] = prev_commit.hexsha
-        foundRegex['reason'] = key
+        foundRegex['reason'] = "Regex"
         regex_matches.append(foundRegex)
 
     return regex_matches
@@ -698,7 +701,6 @@ def diff_worker(args,
                 do_entropy,
                 do_regex,
                 printJson,
-                surpress_output,
                 path_inclusions,
                 path_exclusions,
                 allow,
@@ -709,6 +711,7 @@ def diff_worker(args,
     count_regex = 0
 
     for blob in diff:
+        found_issues = []
         printable_diff = blob.diff.decode('utf-8', errors='replace')
         file_path = blob.b_path if blob.b_path else blob.a_path
 
@@ -717,7 +720,7 @@ def diff_worker(args,
         if not include_path(blob, path_inclusions, path_exclusions):
             continue
 
-        # Human readable?
+        # from here on, we try and get file contents
         repo_commit = repo.commit(prev_commit)
         repo_curr_commit = repo.commit(commitHash)
 
@@ -726,15 +729,33 @@ def diff_worker(args,
         else:
             file_contents = repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace')
 
-        if args.human_readable_only and not human_readable_code(file_contents):
-            continue
+        if args.human_readable_only:  # if user requests we determine human readable code ...
+            is_human_readable, file_hr_signature = human_readable_code(args, file_contents)
+            if not is_human_readable:
+                binary_hr_signature = [int(x) for x in file_hr_signature]  # pattern signature for future stats
+                if args.show_hr_ignored_files and not is_human_readable:
+                    entropic_diff = {}
+                    _commit = prev_commit.message
+                    commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
+                    entropic_diff['date'] = commit_time
+                    entropic_diff['path'] = file_path
+                    entropic_diff['branch'] = branch_name
+                    entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
+                    entropic_diff['printDiff'] = "<diff-suppressed>"
+                    entropic_diff['commitHash'] = prev_commit.hexsha
+                    entropic_diff['reason'] = "Ignored"
+                    entropic_diff['hr-signature'] = binary_hr_signature
+
+                    if printJson and output_json_stream:  # stream data if asked to
+                        print(json.dumps(entropic_diff, sort_keys=True))
+                    if not printJson:
+                        print_results(args, found_issue, print_diff)
+                continue
 
         for key in allow:
             printable_diff = allow[key].sub('', printable_diff)
 
         commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
-
-        found_issues = []
 
         if do_entropy:
             entropic_diff = find_entropy(args,
@@ -750,7 +771,8 @@ def diff_worker(args,
                 count_entropy += 1
 
         if do_regex:
-            found_regexes = regex_check(printable_diff,
+            found_regexes = regex_check(args,
+                                        printable_diff,
                                         commit_time,
                                         branch_name,
                                         prev_commit,
@@ -762,12 +784,11 @@ def diff_worker(args,
                 found_issues += found_regexes
                 count_regex += len(found_regexes)
 
-        if not surpress_output:
-            for found_issue in found_issues:
-                if printJson and output_json_stream:
-                    print(json.dumps(found_issue, sort_keys=True))
-                if not printJson:
-                    print_results(args.color, found_issue, print_diff)
+        for found_issue in found_issues:
+            if printJson and output_json_stream:
+                print(json.dumps(found_issue, sort_keys=True))
+            if not printJson:
+                print_results(args, found_issue, print_diff)
 
         if len(found_issues) > 0:
             issues.extend(found_issues)
@@ -794,10 +815,11 @@ def include_path(blob, include_patterns=None, exclude_patterns=None):
     `exclude_patterns` (when provided), otherwise returns True
     """
     path = blob.b_path if blob.b_path else blob.a_path
-    if include_patterns and not any(p.match(path) for p in include_patterns):
+    if include_patterns and any([re.compile(exclude_patterns[k]).match(path) for k in include_patterns]):
         return False
-    if exclude_patterns and any(p.match(path) for p in exclude_patterns):
+    if exclude_patterns and any([re.compile(exclude_patterns[k]).match(path) for k in exclude_patterns]):
         return False
+
     return True
 
 
@@ -808,7 +830,6 @@ def find_strings(args,
                  printJson=False,
                  do_regex=False,
                  do_entropy=True,
-                 surpress_output=True,
                  custom_regexes={},
                  branch=None,
                  repo_path=None,
@@ -873,7 +894,6 @@ def find_strings(args,
                 do_entropy,
                 do_regex,
                 printJson,
-                surpress_output,
                 path_inclusions,
                 path_exclusions,
                 allow,
@@ -909,7 +929,6 @@ def find_strings(args,
             do_entropy,
             do_regex,
             printJson,
-            surpress_output,
             path_inclusions,
             path_exclusions,
             allow,

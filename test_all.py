@@ -38,7 +38,7 @@ class MockArg:
 class TestStringMethods(unittest.TestCase):
     def test_regex(self):
         import re
-        regexes = truffleHogger.load_regexes()
+        regexes = truffleHogger.load_regexes(args)
         # every one of these should match and if any did not, fail the test
         test_strings = [
             'sk_test_4eC39HqLyjWDarjtT1zdp7dc',

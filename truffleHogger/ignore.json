@@ -1,0 +1,20 @@
+{
+    "JQuery": "Copyright \\d{4} jQuery Foundation and other contributors;.*",
+    "HTML": ".*.htm",
+    "HTML": ".*.html",
+    "CSS": ".*.css",
+    "GitIgnore file": ".*.gitignore",
+    "Git": ".*.git",
+    "Lock File": ".*.lock",
+    "Minified file": ".*.min.js",
+    "NodeJS Modules": ".*/node_modules/.*",
+    "Compiled Python Binary": ".*.pyc",
+    "SVG": ".*.svg",
+    "Jpeg": ".*.jpg",
+    "Jpeg": ".*.jpeg",
+    "PNG": ".*.png",
+    "Gif": ".*.gif",
+    "Minified File": ".*.min",
+    "Compressed File": ".*.compressed",
+    "Tar File": ".*.tar"
+}
