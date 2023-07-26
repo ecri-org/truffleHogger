@@ -20,5 +20,5 @@ setup(
     entry_points={
       'console_scripts': ['trufflehogger = truffleHogger.truffleHogger:main'],
     },
-    python_requires='>=3.7'
+    python_requires='>=3.10'
 )
