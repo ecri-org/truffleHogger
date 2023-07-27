@@ -11,12 +11,14 @@ import git
 import hashlib
 import json
 import math
+import mmap
 import os
 import re
 import shutil
 import stat
 import sys
 import tempfile
+import time
 
 
 def generate_charset(from_range, to_range):
@@ -32,10 +34,14 @@ SECRET_CHARSET = generate_charset(33, 127)
 HEX_CHARS = "1234567890abcdefABCDEF"
 
 
-def process_pattern_list(paths, pattern_list=[], comment='#'):
+def process_pattern_list(paths, pattern_list=None, comment='#'):
+    if pattern_list is None:
+        pattern_list = []
+
     for pattern in set(line[:-1].lstrip() for line in paths):
         if pattern and not pattern.startswith(comment):
             pattern_list.append(re.compile(pattern))
+
     return pattern_list
 
 
@@ -59,7 +65,7 @@ class ExitCode(enum.Enum):
 
 def zero_out(variable):
     """
-    Not a guarentee but we can at least try and zero out any memory we're not comfortable with.
+    Not a guarantee but we can at least try and zero out any memory we're not comfortable with.
     """
     strlen = len(variable)
     offset = sys.getsizeof(variable) - strlen - 1
@@ -111,96 +117,176 @@ def summary(args, output):
     exit_app(exit_code)
 
 
-def has_minified_whitespace(file_contents, threshold=0.08):
-    whitespace_count = len(re.findall(r'\s', file_contents))
+def has_minified_whitespace(data):
+    threshold = data['thresholds']['minified_whitespace_threshold']
+    whitespace_count = data['stats']['whitespace_count']
+    total_characters = data['stats']['total_characters']
 
-    if len(file_contents) <= 0:
-        whitespace_ratio = 0
-    else:
-        whitespace_ratio = whitespace_count / len(file_contents)
+    # Read the line from data
+    line_str = data['line']
 
-    return whitespace_ratio < threshold
+    # Calculate the number of whitespace characters in the line and update the count
+    whitespace_count += len(re.findall(r'\s', line_str))
+    # Update the total characters count with the length of the current line
+    total_characters += len(line_str)
+    whitespace_ratio = whitespace_count / total_characters
 
+    # Update the pattern dictionary in the data with the updated counts
+    data['stats']['whitespace_count'] = whitespace_count
+    data['stats']['total_characters'] = total_characters
+    data['stats']['whitespace_ratio'] = whitespace_ratio
+    data['pattern']['has_minified_whitespace'] = whitespace_ratio < threshold
 
-# Not accurate
-def has_short_variable_names(file_contents, threshold_length=2):
-    variable_names = re.findall(r'\b\w{1,' + str(threshold_length) + r'}\b', file_contents)
-    return len(variable_names) > 0
-
-
-# Not accurate, i.e. printing tables, though one should do it programmatically...
-def has_repeated_characters(file_contents, threshold_repeats=5):
-    repeated_chars = re.findall(r'(\S)\1{' + str(threshold_repeats - 1) + r',}', file_contents)
-    return len(repeated_chars) > 0
-
-
-# Not accurate
-def has_short_string_literals(file_contents, threshold_length=3):
-    string_literals = re.findall(r'["\'][\S\s]{1,' + str(threshold_length - 1) + r'}["\']', file_contents)
-    return len(string_literals) > 0
+    return data
 
 
 # a very low threshold, where minified has hardly ANY
 # i.e. values as low as 0.0008
-def has_low_comment_ratio(file_contents, threshold=0.01, comment_patterns=None):
-    # Combine all comment patterns into a single regex pattern
-    # all_comment_patterns = '|'.join([f'({pattern})' for pattern in comment_patterns])
-    # Combine all multi-line comment patterns into a single regex pattern
-    # all_multi_line_comment_patterns = '|'.join([f'({pattern})' for pattern in multi_line_comment_patterns])
-    comment_patterns_combined = [
-        r'//(?!https?://|ftp://|sftp://).*',  # JavaScript, Java, C, C++
-        r'(\'\'\'|""")[\s\S]*?\1',        # Python
-        r'--.*',                          # SQL, Lua
-        r'=begin[\s\S]*?=end',            # Ruby
-        r'<!--.*?-->',                    # HTML/XML
-        r'/\*[\s\S]*?\*/',                # Multi-line C Style
-        r'#.*',                           # Bash/Shell, PHP, Single line Perl
-        r'=pod[\s\S]*?=cut',              # Multi-line Perl POD comments
-        r'(?<!\\)\#.*',                   # Single-line C-style comments in Perl
-        r'\-\-\[\[\s\S]*?\]\]'            # Multi-line Lua comments
-    ]
+def has_low_comment_ratio(data, comment_patterns=None):
+    threshold = data['thresholds']['low_comment_ratio_threshold']
+    comment_count = data['stats']['comment_count']
+    total_characters = data['stats']['total_characters']
 
+    # Read the line from data
+    line_str = data['line']
+
+    # Update the total characters count with the length of the current line
+    total_characters += len(line_str)
+
+    # Calculate the number of comments in the line and update the count
     if comment_patterns is None:
-        comment_patterns = comment_patterns_combined
+        comment_patterns = [
+            r'//(?!https?://|ftp://|sftp://).*',  # JavaScript, Java, C, C++
+            r'(\'\'\'|""")[\s\S]*?\1',        # Python
+            r'--.*',                          # SQL, Lua
+            r'=begin[\s\S]*?=end',            # Ruby
+            r'<!--.*?-->',                    # HTML/XML
+            r'/\*[\s\S]*?\*/',                # Multi-line C Style
+            r'#.*',                           # Bash/Shell, PHP, Single line Perl
+            r'=pod[\s\S]*?=cut',              # Multi-line Perl POD comments
+            r'(?<!\\)\#.*',                   # Single-line C-style comments in Perl
+            r'\-\-\[\[\s\S]*?\]\]'            # Multi-line Lua comments
+        ]
+    all_comment_patterns = '|'.join([f'({pattern})' for pattern in comment_patterns])
+    comment_count += len(re.findall(all_comment_patterns, line_str))
 
-    # Combine all comment patterns into a single regex pattern
-    all_comment_patterns = '|'.join([f'({pattern})' for pattern in comment_patterns_combined])
-
-    # Remove all comments from the content
-    content_without_comments = re.sub(all_comment_patterns, '', file_contents)
-
-    if len(file_contents) <= 0:
-        comment_ratio = 0
-    else:
-        # Calculate the ratio of comments to total characters
-        comment_ratio = (len(file_contents) - len(content_without_comments)) / len(file_contents)
+    # Update the comment-related values in the data dictionary
+    data['stats']['comment_count'] = comment_count
+    data['stats']['total_characters'] = total_characters
+    data['stats']['comment_ratio'] = comment_count / total_characters
+    comment_ratio = (comment_count / total_characters) < threshold
 
     # Check if the comment ratio is below the threshold
-    # print(comment_ratio)
-    return comment_ratio < threshold
+    data['pattern']['has_low_comment_ratio'] = comment_ratio
+
+    return data
 
 
-def minified_source_map(file_contents, regex=r'.*js.map'):
-    found = re.findall(regex, file_contents)
-    return len(found) > 0
+def has_single_line(data):
+    line_count = data['stats']['line_count']
+
+    # Increment the line count
+    line_count += 1
+
+    # Update the line count in the data dictionary
+    data['stats']['line_count'] = line_count
+
+    # Check if the line count is greater than 1
+    data['pattern']['has_single_line'] = line_count == 1
+
+    return data
 
 
-# Not accurate
-def has_single_line_structure(file_contents, threshold_lines=2):
-    line_count = len(file_contents.splitlines())
-    return line_count <= threshold_lines
+def has_long_single_first_line(data):
+    threshold = data['thresholds']['line_length_threshold']
+
+    if data['stats']['first_line'] is None:
+        data['stats']['first_line'] = data['line']
+        length = len(data['stats']['first_line'])
+        data['pattern']['has_long_single_first_line'] = length > threshold
+
+    return data
 
 
-def has_single_line(file_contents):
-    return len(file_contents.split('\n')) == 1
+def minified_source_map(data, regex=r'.*js.map'):
+    found = data['stats']['minified_source_map']
+
+    # Read the line from data
+    line_str = data['line']
+
+    # Check if the regex pattern is found in the current line
+    found += len(re.findall(regex, line_str))
+
+    # Update the 'found' count in the data dictionary
+    data['stats']['minified_source_map'] = found
+
+    # Check if 'found' is greater than 0
+    data['pattern']['minified_source_map'] = found > 0
 
 
-def has_long_single_first_line(file_contents, line_length_threshold=500):
-    return len(file_contents.split('\n')[0]) > line_length_threshold
+def get_new_data():
+    return {
+        'line': '',
+        'thresholds': {
+            'line_length_threshold': 300,
+            'minified_whitespace_threshold': 0.03,
+            'low_comment_ratio_threshold': 0.01,
+        },
+        'stats': {
+            'line_count': 0,
+            'first_line': None,
+            'whitespace_count': 0,
+            'whitespace_ratio': 0,
+            'comment_ratio': 0,
+            'comment_count': 0,
+            'total_characters': 0,
+            'minified_source_map': 0,
+        },
+        'pattern': {
+            'has_minified_whitespace': False,
+            'has_low_comment_ratio': False,
+            'has_single_line': False,
+            'has_long_single_first_line': False,
+            'minified_source_map': False,
+        }
+    }
 
 
-# try and ensure file_data is the entire file
-def human_readable_code(args, file_contents):
+def get_pattern(data):
+    order = [
+        'has_minified_whitespace',
+        'has_low_comment_ratio',
+        'has_single_line',
+        'has_long_single_first_line',
+        'minified_source_map',
+    ]
+
+    return [data['pattern'][p] for p in order]
+
+
+def process_file(args, tmp_file_path):
+    data = get_new_data()
+    line_threshold = data['thresholds']['line_length_threshold']
+
+    with open(tmp_file_path, 'r') as file:
+        with mmap.mmap(file.fileno(), length=0, access=mmap.ACCESS_READ) as file_mmap:
+            for line in iter(file_mmap.readline, b''):
+                line_str = line.decode('utf-8', errors='replace')
+                data['line'] = line_str[0:(line_threshold * 2)]  # single line can be HUGE, limit it but grab enough
+                data['stats']['line_count'] += 1
+
+                # Trying to be runtime efficient, I've gone full-blown mutant with heavy mutation ...
+                # Professor Xavier, where are you?
+                has_minified_whitespace(data)
+                has_low_comment_ratio(data)
+                has_single_line(data)
+                has_long_single_first_line(data)
+                minified_source_map(data)
+        file_mmap.close()
+    return data
+
+
+def human_readable_code(args, tmp_file_path):
     '''
     There are numerous ways to detect minified code, none and all would only give you an idea. The techniques below
     coupled with a generic regex rule we use above can help.
@@ -228,26 +314,23 @@ def human_readable_code(args, file_contents):
     One can check the number of lines in the code and the average length of the lines.
     '''
 
-    # has_short_variable_names(file_contents),  # not accurate
-    # has_repeated_characters(file_contents),   # not accurate
-    # has_short_string_literals(file_contents), # not accurate
-    # has_single_line_structure(file_contents), # not accurate
-    structure_pattern = [
-        has_minified_whitespace(file_contents),
-        has_low_comment_ratio(file_contents),
-        has_single_line(file_contents),
-        has_long_single_first_line(file_contents, args.max_line_length),
-        minified_source_map(file_contents)
-    ]
+    # has_minified_whitespace
+    # has_low_comment_ratio
+    # has_single_line
+    # has_long_single_first_line
+    # minified_source_map
+
+    data = process_file(args, tmp_file_path)
+    structure_pattern = get_pattern(data)
 
     match structure_pattern:
-        case [True, True, _, True]:       # no white space, low comments, and a long first line
+        case [True, True, _, True, _]:       # no white space, low comments, and a long first line
             return False, structure_pattern
-        case [True, True, False, False]:  # no white space, low comments, no single line attrs
+        case [True, True, False, False, _]:  # no white space, low comments, no single line attrs
             return False, structure_pattern
         case [True, _, _, True, _]:       # no white space, but has a long single line
             return False, structure_pattern
-        case [_, _, True, True]:          # single line attrs
+        case [_, _, True, True, _]:          # single line attrs
             return False, structure_pattern
         case [_, _, _, _, True]:          # has source map at end
             return False, structure_pattern
@@ -279,7 +362,10 @@ def display_info(args, path_inclusions, path_exclusions):
         print(msg)
 
 
-def read_file_entries(file, compiled_dict={}):
+def read_file_entries(file, compiled_dict=None):
+    if compiled_dict is None:
+        compiled_dict = {}
+
     try:
         with open(file, "r") as entryFile:
             compiled_dict = json.loads(entryFile.read())
@@ -329,7 +415,7 @@ def main():
     parser.add_argument("--suppress-summary", dest="suppress_summary", action='store_true',
                         help="Suppress summary output (meant for ci/cd tools")
     parser.add_argument("--human-readable-only", dest="human_readable_only", action='store_true',
-                        help="Try to only analyze human readable files - WARNING: VERY SLOW and sometimes not accurate")
+                        help="Try to only analyze human readable files - WARNING: OK, not very accurate")
     parser.add_argument("--show-hr-ignored-files", dest="show_hr_ignored_files", action='store_true',
                         help="Show files that are ignored as not human readable or files that don't pass our human readable tests")
     # The topic is 'mask_secrets', and the flag 'show-secrets' will mark mask_secrets as false,
@@ -498,25 +584,47 @@ def print_results(args, issue, print_diff):
     commit_hash = issue['commitHash']
     lines_found = issue['linesFound']
     detailed_found = issue['detailedFound']
+
     if 'secretTypesFound' in issue.keys():
-        secrettypes_found = issue['secretTypesFound']
+        secret_types_found = issue['secretTypesFound']
+    else:
+        secret_types_found = []
+
     reason = issue['reason']
     path = issue['path']
+
+    if 'hrSignature' in issue.keys():
+        hr_signature = issue['hrSignature']
+        hr_signature_str = f"{line_color_start}Human readable score: {hr_signature}{line_color_end}"
+    else:
+        hr_signature_str = f"{line_color_start}Human readable score: n/a{line_color_end}"
+
+    if 'elapsedTime' in issue.keys():
+        elapsed_time = issue['elapsedTime']
+        elapsed_time_str = f"{line_color_start}Evaluation elapsed time: {elapsed_time}{line_color_end}"
+    else:
+        elapsed_time_str = f"{line_color_start}Evaluation elapsed time: n/a{line_color_end}"
+
+    if 'fileSize' in issue.keys():
+        file_size = issue['fileSize']
+        file_size_str = f"{line_color_start}File size: {file_size}{line_color_end}"
+    else:
+        file_size_str = f"{line_color_start}File size: n/a{line_color_end}"
 
     reason_str = f"{line_color_start}Reason: {reason}{line_color_end}"
     date_str = f"{line_color_start}Date: {commit_time}{line_color_end}"
     hash_str = f"{line_color_start}Hash: {commit_hash}{line_color_end}"
-    file_path = f"{line_color_start}Filepath: {path}{line_color_end}"
-    lines_str = f"{line_color_start}Lines: {lines_found}{line_color_end}"
+    file_path_str = f"{line_color_start}File path: [{path}]{line_color_end}"
+    lines_str = f"{line_color_start}Line numbers: {lines_found}{line_color_end}"
 
     if args.mask_secrets:
-        detail_str = f"{line_color_start}DetailedLines: <masked-possible-passwords> {line_color_end}"
+        detail_str = f"{line_color_start}Detailed line numbers: <masked-possible-passwords> {line_color_end}"
     else:
-        detail_str = f"{line_color_start}DetailedLines: {detailed_found}{line_color_end}"
+        detail_str = f"{line_color_start}Detailed lines numbers: {detailed_found}{line_color_end}"
 
     if sys.version_info >= (3, 0):
         branch_str = f"{line_color_start}Branch: {branch_name}{line_color_end}"
-        commit_str = f"{line_color_start}Commit: {prev_commit}{line_color_end}".replace('\n', '')
+        commit_str = f"{line_color_start}Commit message: {prev_commit}{line_color_end}".replace('\n', '')
         diff = printable_diff if print_diff else '<suppressed>'
         diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
     else:
@@ -526,13 +634,16 @@ def print_results(args, issue, print_diff):
         diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
     output = f'''
-    {file_path}
+    {file_path_str}
+        {file_size_str}
         {reason_str}
+        {hr_signature_str}
+        {elapsed_time_str}
         {date_str}
         {hash_str}
         {branch_str}
         {lines_str}
-        {secrettypes_found if reason == 'Regex' else detail_str}
+        {secret_types_found if reason == 'Regex' else detail_str}
         {commit_str[0:65]}
         {diff_str}
     '''
@@ -559,19 +670,29 @@ def get_hunk_values(diff):
         prefix = '-'
 
     # pattern match here for strange cases
-    # if f'{original_start},{original_count},{modified_start}' == '0,0,1':  # the case where 1 file, 1 line
     if (original_start, original_count, modified_start) == (0, 0, 1):  # the case where 1 file, 1 line
         index_correction = 0
 
     return curr_line, index_correction, original_start, original_count, prefix
 
 
-def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, blob, file_path, print_diff):
+def find_entropy(args,
+                 printable_diff,
+                 commit_time,
+                 branch_name,
+                 prev_commit,
+                 blob,
+                 file_path,
+                 print_diff,
+                 file_hr_signature,
+                 file_size,
+                 elapsed_time=0):
     strings_found = []
     line_numbers_found = []
     entropy_values = []
     threshold = args.length_threshold
     curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
+    start_time = time.time()
 
     for index, line in enumerate(printable_diff.split("\n")):
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
@@ -593,17 +714,21 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
                         string,
                         bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
                     )
+
             for string in hex_strings:
                 hex_entropy = shannon_entropy(string, HEX_CHARS)
                 if hex_entropy > args.entropy_threshold_hex:
                     secret = mask(args.mask_secrets, string)
                     strings_found.append(secret)
-                    entropy_values.append(entropy_value)
+                    entropy_values.append(hex_entropy)
                     line_numbers_found.append(curr_line)
                     printable_diff = printable_diff.replace(
                         string,
                         bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
                     )
+
+    end_time = time.time()  # bulk of ops end here, record it
+    diff_elapsed_time = end_time - start_time
 
     if len(strings_found) > 0:
         entropic_diff = {}
@@ -624,6 +749,9 @@ def find_entropy(args, printable_diff, commit_time, branch_name, prev_commit, bl
         entropic_diff['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
         entropic_diff['commitHash'] = prev_commit.hexsha
         entropic_diff['reason'] = "High Entropy"
+        entropic_diff['elapsedTime'] = f"hr:{elapsed_time},diff:{diff_elapsed_time:.6f} seconds"
+        entropic_diff['hrSignature'] = file_hr_signature
+        entropic_diff['fileSize'] = f"{file_size} bytes"
         return entropic_diff
 
     return None
@@ -638,11 +766,27 @@ def zipEntries(lines, strings, annotate=True):
     return [f'{x}:{y}' for x, y in zipped]
 
 
-def regex_check(args, printable_diff, commit_time, branch_name, prev_commit, blob, print_diff, file_path, custom_regexes={}):
+def regex_check(args,
+                printable_diff,
+                commit_time,
+                branch_name,
+                prev_commit,
+                blob,
+                print_diff,
+                file_path,
+                file_hr_signature,
+                file_size,
+                custom_regexes=None,
+                elapsed_time=0):
+
+    if custom_regexes is None:
+        custom_regexes = {}
+
     strings_found = []
     line_numbers_found = []
     regex_matches = []
     secret_types_found = []
+    found_diff = 'n/a'
 
     if custom_regexes:
         secret_regexes = custom_regexes
@@ -666,26 +810,33 @@ def regex_check(args, printable_diff, commit_time, branch_name, prev_commit, blo
                 secret_types_found.append(key)
                 line_numbers_found.append(curr_line)
 
+    start_time = time.time()
+    end_time = time.time()  # bulk of ops end here, record it
+    diff_elapsed_time = end_time - start_time
+
     if len(strings_found) > 0:
-        foundRegex = {}
+        found_regex = {}
         _commit = prev_commit.message
-        foundRegex['date'] = commit_time
-        foundRegex['path'] = file_path
-        foundRegex['branch'] = branch_name
-        foundRegex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
+        found_regex['date'] = commit_time
+        found_regex['path'] = file_path
+        found_regex['branch'] = branch_name
+        found_regex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
         # please rely on printDiff as that is masked
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
-        foundRegex['stringsFound'] = strings_found  # already has masked strings, don't remask
-        foundRegex['linesFound'] = line_numbers_found  # lines where hits found
-        foundRegex['secretTypesFound'] = zipEntries(
+        found_regex['stringsFound'] = strings_found  # already has masked strings, don't remask
+        found_regex['linesFound'] = line_numbers_found  # lines where hits found
+        found_regex['secretTypesFound'] = zipEntries(
             zipEntries(line_numbers_found, secret_types_found),
             strings_found,
         )
-        foundRegex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
-        foundRegex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
-        foundRegex['commitHash'] = prev_commit.hexsha
-        foundRegex['reason'] = "Regex"
-        regex_matches.append(foundRegex)
+        found_regex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
+        found_regex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
+        found_regex['commitHash'] = prev_commit.hexsha
+        found_regex['reason'] = "Regex"
+        found_regex['elapsedTime'] = f"hr:{elapsed_time},diff:{diff_elapsed_time:.6f} seconds"
+        found_regex['hrSignature'] = file_hr_signature
+        found_regex['fileSize'] = f"{file_size} bytes"
+        regex_matches.append(found_regex)
 
     return regex_matches
 
@@ -709,6 +860,10 @@ def diff_worker(args,
     issues = []
     count_entropy = 0
     count_regex = 0
+    file_hr_signature = 'n/a'
+    binary_hr_signature = 'n/a'
+    hr_signature_str = 'n/a'
+    file_size = 0
 
     for blob in diff:
         found_issues = []
@@ -723,34 +878,58 @@ def diff_worker(args,
         # from here on, we try and get file contents
         repo_commit = repo.commit(prev_commit)
         repo_curr_commit = repo.commit(commitHash)
-
-        if blob.deleted_file:
-            file_contents = repo_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace')
-        else:
-            file_contents = repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace')
+        elapsed_time = 0
 
         if args.human_readable_only:  # if user requests we determine human readable code ...
-            is_human_readable, file_hr_signature = human_readable_code(args, file_contents)
-            if not is_human_readable:
-                binary_hr_signature = [int(x) for x in file_hr_signature]  # pattern signature for future stats
-                if args.show_hr_ignored_files and not is_human_readable:
-                    entropic_diff = {}
-                    _commit = prev_commit.message
-                    commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
-                    entropic_diff['date'] = commit_time
-                    entropic_diff['path'] = file_path
-                    entropic_diff['branch'] = branch_name
-                    entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
-                    entropic_diff['printDiff'] = "<diff-suppressed>"
-                    entropic_diff['commitHash'] = prev_commit.hexsha
-                    entropic_diff['reason'] = "Ignored"
-                    entropic_diff['hr-signature'] = binary_hr_signature
+            hr_start_time = time.time()  # start here as we want to include time it takes to write a tmp file
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Save the file from repo_commit to a temporary location
+                tmp_file_path = os.path.join(tmpdir, os.path.basename(file_path))
+                with open(tmp_file_path, 'w') as tmp_file:
+                    if blob.deleted_file:
+                        tmp_file.write(repo_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
+                    else:
+                        tmp_file.write(repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
 
-                    if printJson and output_json_stream:  # stream data if asked to
-                        print(json.dumps(entropic_diff, sort_keys=True))
-                    if not printJson:
-                        print_results(args, found_issue, print_diff)
-                continue
+                    tmp_file.flush()
+
+                tmp_file.close()
+                file_size = os.path.getsize(tmp_file_path)
+
+                if file_size > 0:
+                    is_human_readable, file_hr_signature = human_readable_code(args, tmp_file_path)
+                    binary_hr_signature = [int(x) for x in file_hr_signature]  # pattern signature for future stats
+                    hr_signature_str = f"{binary_hr_signature}, {is_human_readable}"
+
+                    hr_end_time = time.time()  # bulk of ops end here, record it
+                    elapsed_time = hr_end_time - hr_start_time
+
+                    if not is_human_readable:
+                        if args.show_hr_ignored_files:
+                            entropic_diff = {}
+                            _commit = prev_commit.message
+                            commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
+                            entropic_diff['date'] = commit_time
+                            entropic_diff['path'] = file_path
+                            entropic_diff['branch'] = branch_name
+                            entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
+                            entropic_diff['printDiff'] = "<diff-suppressed>"
+                            entropic_diff['commitHash'] = prev_commit.hexsha
+                            entropic_diff['reason'] = "Ignored"
+                            entropic_diff['hrSignature'] = hr_signature_str
+                            entropic_diff['elapsedTime'] = f"{elapsed_time:.6f} seconds"
+                            entropic_diff['fileSize'] = f"{file_size} bytes"
+                            entropic_diff['linesFound'] = 'n/a'
+                            entropic_diff['detailedFound'] = 'n/a'
+
+                            if printJson and output_json_stream:  # stream data if asked to
+                                print(json.dumps(entropic_diff, sort_keys=True))
+                            if not printJson:
+                                print_results(args, entropic_diff, print_diff)
+
+                        continue
+                else:
+                    continue
 
         for key in allow:
             printable_diff = allow[key].sub('', printable_diff)
@@ -765,7 +944,10 @@ def diff_worker(args,
                                          prev_commit,
                                          blob,
                                          file_path,
-                                         print_diff)
+                                         print_diff,
+                                         hr_signature_str,
+                                         file_size,
+                                         elapsed_time)
             if entropic_diff:
                 found_issues.append(entropic_diff)
                 count_entropy += 1
@@ -779,7 +961,10 @@ def diff_worker(args,
                                         blob,
                                         print_diff,
                                         file_path,
-                                        custom_regexes)
+                                        hr_signature_str,
+                                        file_size,
+                                        custom_regexes,
+                                        elapsed_time)
             if len(found_regexes):
                 found_issues += found_regexes
                 count_regex += len(found_regexes)
@@ -797,7 +982,7 @@ def diff_worker(args,
 
 
 def include_path(blob, include_patterns=None, exclude_patterns=None):
-    """Check if the diff blob object should included in analysis.
+    """Check if the diff blob object should be included in analysis.
 
     If defined and non-empty, `include_patterns` has precedence over `exclude_patterns`, such that a blob that is not
     matched by any of the defined `include_patterns` will be excluded, even when it is not matched by any of the defined
@@ -815,7 +1000,8 @@ def include_path(blob, include_patterns=None, exclude_patterns=None):
     `exclude_patterns` (when provided), otherwise returns True
     """
     path = blob.b_path if blob.b_path else blob.a_path
-    if include_patterns and any([re.compile(exclude_patterns[k]).match(path) for k in include_patterns]):
+
+    if include_patterns and not any([re.compile(include_patterns[k]).match(path) for k in include_patterns]):
         return False
     if exclude_patterns and any([re.compile(exclude_patterns[k]).match(path) for k in exclude_patterns]):
         return False
@@ -827,17 +1013,24 @@ def find_strings(args,
                  git_url,
                  since_commit=None,
                  max_depth=1000000,
-                 printJson=False,
+                 print_json=False,
                  do_regex=False,
                  do_entropy=True,
-                 custom_regexes={},
+                 custom_regexes=None,
                  branch=None,
                  repo_path=None,
                  path_inclusions=None,
                  path_exclusions=None,
-                 allow={},
+                 allow=None,
                  print_diff=True,
                  output_json_stream=False):
+
+    if allow is None:
+        allow = {}
+
+    if custom_regexes is None:
+        custom_regexes = {}
+
     output = {"foundIssues": [], "countEntropy": 0, "countRegex": 0}
 
     if repo_path:
@@ -857,7 +1050,9 @@ def find_strings(args,
         since_commit_reached = False
         branch_name = remote_branch.name
         friendly_branch_name = f'origin/{branch}' if remote_branch.name == 'FETCH_HEAD' else remote_branch.name
+        curr_commit = None
         prev_commit = None
+        commitHash = None
 
         for curr_commit in repo.iter_commits(branch_name, max_count=max_depth):
             commitHash = curr_commit.hexsha
@@ -893,7 +1088,7 @@ def find_strings(args,
                 custom_regexes,
                 do_entropy,
                 do_regex,
-                printJson,
+                print_json,
                 path_inclusions,
                 path_exclusions,
                 allow,
@@ -913,6 +1108,7 @@ def find_strings(args,
             # Handle when there's no prev_commit (used since_commit on the most recent commit)
             if prev_commit is None:
                 continue
+
             diff = prev_commit.diff(curr_commit, create_patch=True)
         else:
             diff = curr_commit.diff(git.NULL_TREE, create_patch=True)
@@ -928,7 +1124,7 @@ def find_strings(args,
             custom_regexes,
             do_entropy,
             do_regex,
-            printJson,
+            print_json,
             path_inclusions,
             path_exclusions,
             allow,

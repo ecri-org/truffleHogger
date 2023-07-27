@@ -1,7 +1,8 @@
 {
     "JQuery": "Copyright \\d{4} jQuery Foundation and other contributors;.*",
-    "HTML": ".*.htm",
+    "HTM": ".*.htm",
     "HTML": ".*.html",
+    "XML": ".*.xml",
     "CSS": ".*.css",
     "GitIgnore file": ".*.gitignore",
     "Git": ".*.git",
