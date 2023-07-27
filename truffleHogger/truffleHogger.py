@@ -51,7 +51,7 @@ def load_regexes(args, file_path="regexes.json"):
     with open(os.path.join(os.path.dirname(__file__), file_path), 'r') as f:
         file = json.loads(f.read())
         for key, pattern in file.items():
-            regexes[key] = re.compile(pattern)
+            regexes[key] = re.compile(pattern, re.IGNORECASE)
 
     return regexes
 
@@ -118,7 +118,7 @@ def summary(args, output):
 
 
 def has_minified_whitespace(data):
-    threshold = data['thresholds']['minified_whitespace_threshold']
+    minified_whitespace_threshold = data['thresholds']['minified_whitespace_threshold']
     whitespace_count = data['stats']['whitespace_count']
     total_characters = data['stats']['total_characters']
 
@@ -135,7 +135,7 @@ def has_minified_whitespace(data):
     data['stats']['whitespace_count'] = whitespace_count
     data['stats']['total_characters'] = total_characters
     data['stats']['whitespace_ratio'] = whitespace_ratio
-    data['pattern']['has_minified_whitespace'] = whitespace_ratio < threshold
+    data['pattern']['has_minified_whitespace'] = whitespace_ratio < minified_whitespace_threshold
 
     return data
 
@@ -197,13 +197,15 @@ def has_single_line(data):
     return data
 
 
-def has_long_single_first_line(data):
+def has_long_line(data):
     threshold = data['thresholds']['line_length_threshold']
+    curr_max_length = data['stats']['max_length']
+    length = len(data['line'])
 
-    if data['stats']['first_line'] is None:
-        data['stats']['first_line'] = data['line']
-        length = len(data['stats']['first_line'])
-        data['pattern']['has_long_single_first_line'] = length > threshold
+    if length > curr_max_length:
+        data['stats']['max_length'] = length
+
+    data['pattern']['has_long_line'] = length > threshold
 
     return data
 
@@ -223,18 +225,23 @@ def minified_source_map(data, regex=r'.*js.map'):
     # Check if 'found' is greater than 0
     data['pattern']['minified_source_map'] = found > 0
 
+    return data
 
-def get_new_data():
+
+def get_new_data(line_length_threshold=300,
+                 minified_whitespace_threshold=0.04,
+                 low_comment_ratio_threshold=0.01):
     return {
         'line': '',
         'thresholds': {
-            'line_length_threshold': 300,
-            'minified_whitespace_threshold': 0.03,
-            'low_comment_ratio_threshold': 0.01,
+            'line_length_threshold': line_length_threshold,
+            'minified_whitespace_threshold': minified_whitespace_threshold,
+            'low_comment_ratio_threshold': low_comment_ratio_threshold,
         },
         'stats': {
             'line_count': 0,
             'first_line': None,
+            'max_length': 0,
             'whitespace_count': 0,
             'whitespace_ratio': 0,
             'comment_ratio': 0,
@@ -246,25 +253,18 @@ def get_new_data():
             'has_minified_whitespace': False,
             'has_low_comment_ratio': False,
             'has_single_line': False,
-            'has_long_single_first_line': False,
+            # 'has_long_single_first_line': False,
+            'has_long_line': False,
             'minified_source_map': False,
         }
     }
 
 
-def get_pattern(data):
-    order = [
-        'has_minified_whitespace',
-        'has_low_comment_ratio',
-        'has_single_line',
-        'has_long_single_first_line',
-        'minified_source_map',
-    ]
-
-    return [data['pattern'][p] for p in order]
+def get_pattern(data, funcs):
+    return [data['pattern'][p] for p in funcs]
 
 
-def process_file(args, tmp_file_path):
+def process_file(args, tmp_file_path, funcs):
     data = get_new_data()
     line_threshold = data['thresholds']['line_length_threshold']
 
@@ -277,17 +277,14 @@ def process_file(args, tmp_file_path):
 
                 # Trying to be runtime efficient, I've gone full-blown mutant with heavy mutation ...
                 # Professor Xavier, where are you?
-                has_minified_whitespace(data)
-                has_low_comment_ratio(data)
-                has_single_line(data)
-                has_long_single_first_line(data)
-                minified_source_map(data)
+                # Why do it this way? The function list is shared with the pattern extractor
+                [globals()[func_name](data) for func_name in funcs]
         file_mmap.close()
     return data
 
 
 def human_readable_code(args, tmp_file_path):
-    '''
+    """
     There are numerous ways to detect minified code, none and all would only give you an idea. The techniques below
     coupled with a generic regex rule we use above can help.
 
@@ -312,29 +309,31 @@ def human_readable_code(args, tmp_file_path):
 
     Code Structure: Minified code is often written in a single line or has very few line breaks.
     One can check the number of lines in the code and the average length of the lines.
-    '''
+    """
 
-    # has_minified_whitespace
-    # has_low_comment_ratio
-    # has_single_line
-    # has_long_single_first_line
-    # minified_source_map
-
-    data = process_file(args, tmp_file_path)
-    structure_pattern = get_pattern(data)
+    funcs = [
+        'has_minified_whitespace',
+        'has_low_comment_ratio',
+        'has_single_line',
+        # 'has_long_single_first_line',
+        'has_long_line',
+        'minified_source_map',
+    ]
+    data = process_file(args, tmp_file_path, funcs)
+    structure_pattern = get_pattern(data, funcs)
 
     match structure_pattern:
         case [True, True, _, True, _]:       # no white space, low comments, and a long first line
             return False, structure_pattern
         case [True, True, False, False, _]:  # no white space, low comments, no single line attrs
             return False, structure_pattern
-        case [True, _, _, True, _]:       # no white space, but has a long single line
+        case [True, _, _, True, _]:          # no white space, but has a long single line
             return False, structure_pattern
         case [_, _, True, True, _]:          # single line attrs
             return False, structure_pattern
-        case [_, _, _, _, True]:          # has source map at end
+        case [_, _, _, _, True]:             # has source map at end
             return False, structure_pattern
-        case _:
+        case _:                              # default case, file is human-readable
             return True, structure_pattern
 
 
@@ -749,7 +748,7 @@ def find_entropy(args,
         entropic_diff['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
         entropic_diff['commitHash'] = prev_commit.hexsha
         entropic_diff['reason'] = "High Entropy"
-        entropic_diff['elapsedTime'] = f"hr:{elapsed_time},diff:{diff_elapsed_time:.6f} seconds"
+        entropic_diff['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
         entropic_diff['hrSignature'] = file_hr_signature
         entropic_diff['fileSize'] = f"{file_size} bytes"
         return entropic_diff
@@ -802,13 +801,22 @@ def regex_check(args,
 
         for key in secret_regexes:
             found_strings = re.findall(secret_regexes[key], line)
+            # if isinstance(found_strings, tuple):
+            #     secret = mask(args.mask_secrets, ''.join(found_strings))
+            # else:
+            #     secret = mask(args.mask_secrets, found_string)
 
             for found_string in found_strings:
-                secret = mask(args.mask_secrets, found_string)
+                if isinstance(found_string, tuple):
+                    secret = mask(args.mask_secrets, ''.join(found_string))
+                else:
+                    secret = mask(args.mask_secrets, line)
+
                 found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
                 strings_found.append(secret)
                 secret_types_found.append(key)
-                line_numbers_found.append(curr_line)
+                # line_numbers_found.append(curr_line)
+                line_numbers_found.append('?')
 
     start_time = time.time()
     end_time = time.time()  # bulk of ops end here, record it
@@ -823,17 +831,18 @@ def regex_check(args,
         found_regex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
         # please rely on printDiff as that is masked
         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
-        found_regex['stringsFound'] = strings_found  # already has masked strings, don't remask
         found_regex['linesFound'] = line_numbers_found  # lines where hits found
+        # found_regex['linesFound'] = []
         found_regex['secretTypesFound'] = zipEntries(
             zipEntries(line_numbers_found, secret_types_found),
             strings_found,
+            annotate=False
         )
         found_regex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
         found_regex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
         found_regex['commitHash'] = prev_commit.hexsha
         found_regex['reason'] = "Regex"
-        found_regex['elapsedTime'] = f"hr:{elapsed_time},diff:{diff_elapsed_time:.6f} seconds"
+        found_regex['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
         found_regex['hrSignature'] = file_hr_signature
         found_regex['fileSize'] = f"{file_size} bytes"
         regex_matches.append(found_regex)
@@ -917,7 +926,7 @@ def diff_worker(args,
                             entropic_diff['commitHash'] = prev_commit.hexsha
                             entropic_diff['reason'] = "Ignored"
                             entropic_diff['hrSignature'] = hr_signature_str
-                            entropic_diff['elapsedTime'] = f"{elapsed_time:.6f} seconds"
+                            entropic_diff['elapsedTime'] = f"hr:{elapsed_time:.6f} seconds"
                             entropic_diff['fileSize'] = f"{file_size} bytes"
                             entropic_diff['linesFound'] = 'n/a'
                             entropic_diff['detailedFound'] = 'n/a'
