@@ -17,17 +17,30 @@ except:
 
 
 class MockArg:
-    def __init__(self, git_url, entropy_threshold_base64=4.5, entropy_threshold_hex=3, length_threshold=20):
+    def __init__(self, git_url,
+                 color=False,
+                 entropy_threshold=4.5,
+                 entropy_threshold_hex=3,
+                 length_threshold=20,
+                 human_readable_only=False,
+                 max_line_length=500,
+                 print_diff=False,
+                 mask_secrets=True):
         self.git_url = git_url
-        self.entropy_threshold_base64 = entropy_threshold_base64
+        self.entropy_threshold = entropy_threshold
         self.entropy_threshold_hex = entropy_threshold_hex
         self.length_threshold = length_threshold
+        self.human_readable_only = human_readable_only
+        self.max_line_length = max_line_length
+        self.print_diff = print_diff
+        self.mask_secrets = mask_secrets
+        self.color = color
 
 
 class TestStringMethods(unittest.TestCase):
     def test_regex(self):
-        import re
-        regexes = truffleHogger.load_regexes()
+        mock_arg = MockArg("test_repo")
+        regexes = truffleHogger.load_regexes(mock_arg)
         # every one of these should match and if any did not, fail the test
         test_strings = [
             'sk_test_4eC39HqLyjWDarjtT1zdp7dc',
@@ -56,7 +69,7 @@ class TestStringMethods(unittest.TestCase):
     def test_shannon(self):
         random_stringB64 = "ZWVTjPQSdhwRgl204Hc51YCsritMIzn8B=/p9UyeX7xu6KkAGqfm3FJ+oObLDNEva"
         random_stringHex = "b3A0a1FDfe86dcCE945B72" 
-        self.assertGreater(truffleHogger.shannon_entropy(random_stringB64, truffleHogger.BASE64_CHARS), 4.5)
+        self.assertGreater(truffleHogger.shannon_entropy(random_stringB64, truffleHogger.SECRET_CHARSET), 4.5)
         self.assertGreater(truffleHogger.shannon_entropy(random_stringHex, truffleHogger.HEX_CHARS), 3)
 
     def test_cloning(self):
@@ -95,8 +108,7 @@ class TestStringMethods(unittest.TestCase):
                 mock_arg,
                 mock_arg.git_url,
                 since_commit=since_commit,
-                printJson=True,
-                surpress_output=False,
+                print_json=True,
                 output_json_stream=True)
         finally:
             sys.stdout = bak_stdout
@@ -112,7 +124,7 @@ class TestStringMethods(unittest.TestCase):
         self.assertEqual(cross_valdiating_commit_w_secret_comment, filtered_results[0]['commit'].strip())
 
     @patch('truffleHogger.truffleHogger.clone_git_repo')
-    @patch('truffleHogger.truffleHogger.Repo')
+    @patch('truffleHogger.truffleHogger.git.Repo')
     @patch('shutil.rmtree')
     def test_branch(self, rmtree_mock, repo_const_mock, clone_git_repo):
         repo = MagicMock()
@@ -140,53 +152,73 @@ class TestStringMethods(unittest.TestCase):
         src_paths = set(blob.a_path for blob in blobs.values() if blob.a_path is not None)
         dest_paths = set(blob.b_path for blob in blobs.values() if blob.b_path is not None)
         all_paths = src_paths.union(dest_paths)
-        all_paths_patterns = [re.compile(re.escape(p)) for p in all_paths]
-        overlap_patterns = [re.compile(r'sub-dir/.*'), re.compile(r'moved/'), re.compile(r'[^/]*file$')]
-        sub_dirs_patterns = [re.compile(r'.+/.+')]
-        deleted_paths_patterns = [re.compile(r'(.*/)?deleted-file$')]
+        all_paths_patterns = [re.escape(p) for p in all_paths]
+
+        all_paths_patterns = {f'pattern_{i}': re.escape(p) for i, p in enumerate(all_paths)}
+
+        overlap_patterns = {
+            'pattern_01': r'sub-dir/.*',
+            'pattern_02': r'moved/',
+            'pattern_03': r'[^/]*file$'
+        }
+
+        sub_dirs_patterns = {
+            'pattern_01': r'.+/.+'
+        }
+
+        deleted_paths_patterns = {
+            'pattern_01': r'(.*/)?deleted-file$'
+        }
+
         for name, blob in blobs.items():
-            self.assertTrue(truffleHogger.path_included(blob),
+            self.assertTrue(truffleHogger.include_path(blob),
                             '{} should be included by default'.format(blob))
-            self.assertTrue(truffleHogger.path_included(blob, include_patterns=all_paths_patterns),
-                            '{} should be included with include_patterns: {}'.format(blob, all_paths_patterns))
-            self.assertFalse(truffleHogger.path_included(blob, exclude_patterns=all_paths_patterns),
+
+            self.assertTrue(truffleHogger.include_path(blob, include_patterns=all_paths_patterns),
+                            f'{blob} should be included with include_patterns: {all_paths_patterns}')
+
+            self.assertFalse(truffleHogger.include_path(blob, exclude_patterns=all_paths_patterns),
                              '{} should be excluded with exclude_patterns: {}'.format(blob, all_paths_patterns))
-            self.assertFalse(truffleHogger.path_included(blob,
-                                                         include_patterns=all_paths_patterns,
-                                                         exclude_patterns=all_paths_patterns),
-                             '{} should be excluded with overlapping patterns: \n\tinclude: {}\n\texclude: {}'.format(
-                                 blob, all_paths_patterns, all_paths_patterns))
-            self.assertFalse(truffleHogger.path_included(blob,
-                                                         include_patterns=overlap_patterns,
-                                                         exclude_patterns=all_paths_patterns),
+
+            self.assertFalse(
+                truffleHogger.include_path(blob,
+                                           include_patterns=all_paths_patterns,
+                                           exclude_patterns=all_paths_patterns),
+                f'{blob} should be excluded with overlapping patterns: \n\tinclude: {all_paths_patterns}\n\texclude: {all_paths_patterns}')
+
+            self.assertFalse(truffleHogger.include_path(blob,
+                                                        include_patterns=overlap_patterns,
+                                                        exclude_patterns=all_paths_patterns),
                              '{} should be excluded with overlapping patterns: \n\tinclude: {}\n\texclude: {}'.format(
                                  blob, overlap_patterns, all_paths_patterns))
-            self.assertFalse(truffleHogger.path_included(blob,
-                                                         include_patterns=all_paths_patterns,
-                                                         exclude_patterns=overlap_patterns),
+
+            self.assertFalse(truffleHogger.include_path(blob,
+                                                        include_patterns=all_paths_patterns,
+                                                        exclude_patterns=overlap_patterns),
                              '{} should be excluded with overlapping patterns: \n\tinclude: {}\n\texclude: {}'.format(
                                  blob, all_paths_patterns, overlap_patterns))
+
             path = blob.b_path if blob.b_path else blob.a_path
             if '/' in path:
-                self.assertTrue(truffleHogger.path_included(blob, include_patterns=sub_dirs_patterns),
+                self.assertTrue(truffleHogger.include_path(blob, include_patterns=sub_dirs_patterns),
                                 '{}: inclusion should include sub directory paths: {}'.format(blob, sub_dirs_patterns))
-                self.assertFalse(truffleHogger.path_included(blob, exclude_patterns=sub_dirs_patterns),
+                self.assertFalse(truffleHogger.include_path(blob, exclude_patterns=sub_dirs_patterns),
                                  '{}: exclusion should exclude sub directory paths: {}'.format(blob, sub_dirs_patterns))
             else:
-                self.assertFalse(truffleHogger.path_included(blob, include_patterns=sub_dirs_patterns),
+                self.assertFalse(truffleHogger.include_path(blob, include_patterns=sub_dirs_patterns),
                                  '{}: inclusion should exclude root directory paths: {}'.format(blob, sub_dirs_patterns))
-                self.assertTrue(truffleHogger.path_included(blob, exclude_patterns=sub_dirs_patterns),
+                self.assertTrue(truffleHogger.include_path(blob, exclude_patterns=sub_dirs_patterns),
                                 '{}: exclusion should include root directory paths: {}'.format(blob, sub_dirs_patterns))
             if name.startswith('deleted-file-'):
-                self.assertTrue(truffleHogger.path_included(blob, include_patterns=deleted_paths_patterns),
+                self.assertTrue(truffleHogger.include_path(blob, include_patterns=deleted_paths_patterns),
                                 '{}: inclusion should match deleted paths: {}'.format(blob, deleted_paths_patterns))
-                self.assertFalse(truffleHogger.path_included(blob, exclude_patterns=deleted_paths_patterns),
+                self.assertFalse(truffleHogger.include_path(blob, exclude_patterns=deleted_paths_patterns),
                                  '{}: exclusion should match deleted paths: {}'.format(blob, deleted_paths_patterns))
 
 
 
     @patch('truffleHogger.truffleHogger.clone_git_repo')
-    @patch('truffleHogger.truffleHogger.Repo')
+    @patch('truffleHogger.truffleHogger.git.Repo')
     @patch('shutil.rmtree')
     def test_repo_path(self, rmtree_mock, repo_const_mock, clone_git_repo):
         mock_arg = MockArg("test_repo")

@@ -39,6 +39,9 @@ New features added:
   - regex checks use same logic as entropy, enabling calculation of line numbers
   - add new arg `--suppress-summary` for those that don't require the summary output (meant to be used with `--json`)
   - add new arg `--color` that allows printing text results in color. This feature was previously the default behavior but has now been made optional
+  - add new arg `--max_line_length_threshold <int>` to limit evaluating lines longer than this, i.e. longer lines signal code which is not human readable (minified code)
+  - add new arg `--human-readable-only` to only evaluate human-readable code (using basic techniques described later), and using mmap temp files
+  - add new arg `--show-hr-ignored-files` to show files which were thrown out as they were deemed not human-readable
 ## Docker
 
 We build an image that you can use: `docker pull ghcr.io/ecri-org/trufflehogger:latest`

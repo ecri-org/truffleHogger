@@ -1,4 +1,7 @@
 {
+    "Custom xml tags": "<(?:.*passw.*|.*pswd.*|.*key|.*token.*|.*secret.*|.*cert.*|cer.*|.*crt.*|.*credent.*|.*authori.*|.*hash.*)>",
+    "Java Keystore": "(?:.*jks.*)\\s*[:=]\\s*?",
+    "Personal Information Exchange file": "(?:.*pfx.*)\\s*[:=]\\s*?",
     "Slack Token": "(xox[p|b|o|a]-[0-9]{12}-[0-9]{12}-[0-9]{12}-[a-z0-9]{32})",
     "RSA private key": "-----BEGIN RSA PRIVATE KEY-----",
     "SSH (DSA) private key": "-----BEGIN DSA PRIVATE KEY-----",

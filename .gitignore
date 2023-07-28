@@ -11,5 +11,6 @@ env/
 
 # there is an .idea/.gitignore file
 # .idea/
-
+*.ipynb
 .gitlab-ci.yml
+temp*.file
