@@ -182,7 +182,7 @@ def has_low_comment_ratio(data, comment_patterns=None):
     return data
 
 
-def has_single_line(data):
+def has_one_line(data):
     line_count = data['stats']['line_count']
 
     # Increment the line count
@@ -228,7 +228,15 @@ def minified_source_map(data, regex=r'.*js.map'):
     return data
 
 
-def get_new_data(line_length_threshold=300,
+def seed_patterns(funcs):
+    patterns = {}
+    for fx in funcs:
+        patterns[fx] = False
+    return patterns
+
+
+def get_new_data(funcs,
+                 line_length_threshold=300,
                  minified_whitespace_threshold=0.04,
                  low_comment_ratio_threshold=0.01):
     return {
@@ -249,23 +257,17 @@ def get_new_data(line_length_threshold=300,
             'total_characters': 0,
             'minified_source_map': 0,
         },
-        'pattern': {
-            'has_minified_whitespace': False,
-            'has_low_comment_ratio': False,
-            'has_single_line': False,
-            # 'has_long_single_first_line': False,
-            'has_long_line': False,
-            'minified_source_map': False,
-        }
+
+        'pattern': seed_patterns(funcs)
     }
 
 
 def get_pattern(data, funcs):
-    return [data['pattern'][p] for p in funcs]
+    return [data['pattern'][fx] for fx in funcs]
 
 
 def process_file(args, tmp_file_path, funcs):
-    data = get_new_data()
+    data = get_new_data(funcs)
     line_threshold = data['thresholds']['line_length_threshold']
 
     with open(tmp_file_path, 'r') as file:
@@ -314,8 +316,7 @@ def human_readable_code(args, tmp_file_path):
     funcs = [
         'has_minified_whitespace',
         'has_low_comment_ratio',
-        'has_single_line',
-        # 'has_long_single_first_line',
+        'has_one_line',
         'has_long_line',
         'minified_source_map',
     ]
@@ -677,87 +678,6 @@ def get_hunk_values(diff):
     return curr_line, index_correction, original_start, original_count, prefix
 
 
-# def find_entropy(args,
-#                  printable_diff,
-#                  commit_time,
-#                  branch_name,
-#                  prev_commit,
-#                  blob,
-#                  file_path,
-#                  print_diff,
-#                  file_hr_signature,
-#                  file_size,
-#                  elapsed_time=0):
-#     strings_found = []
-#     line_numbers_found = []
-#     entropy_values = []
-#     threshold = args.length_threshold
-#     curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
-#     start_time = time.time()
-#
-#     for index, line in enumerate(printable_diff.split("\n")):
-#         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-#             # the next line in the hunk is the start of the 0 index
-#             curr_line = (original_start - index_correction) + index
-#
-#         for word in line.split():
-#             base64_strings = get_strings_of_set(word, SECRET_CHARSET, threshold)
-#             hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
-#
-#             for string in base64_strings:
-#                 entropy_value = shannon_entropy(string, SECRET_CHARSET)
-#                 if entropy_value > args.entropy_threshold:
-#                     secret = mask(args.mask_secrets, string)
-#                     strings_found.append(secret)
-#                     entropy_values.append(entropy_value)
-#                     line_numbers_found.append(curr_line)
-#                     printable_diff = printable_diff.replace(
-#                         string,
-#                         bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
-#                     )
-#
-#             for string in hex_strings:
-#                 hex_entropy = shannon_entropy(string, HEX_CHARS)
-#                 if hex_entropy > args.entropy_threshold_hex:
-#                     secret = mask(args.mask_secrets, string)
-#                     strings_found.append(secret)
-#                     entropy_values.append(hex_entropy)
-#                     line_numbers_found.append(curr_line)
-#                     printable_diff = printable_diff.replace(
-#                         string,
-#                         bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
-#                     )
-#
-#     end_time = time.time()  # bulk of ops end here, record it
-#     diff_elapsed_time = end_time - start_time
-#
-#     if len(strings_found) > 0:
-#         entropic_diff = {}
-#         _commit = prev_commit.message
-#         entropic_diff['date'] = commit_time
-#         entropic_diff['path'] = file_path
-#         entropic_diff['branch'] = branch_name
-#         entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
-#         # please rely on printDiff as that is masked
-#         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
-#         entropic_diff['stringsFound'] = strings_found  # already has masked strings, don't remask
-#         entropic_diff['linesFound'] = line_numbers_found  # lines where hits found
-#         entropic_diff['detailedFound'] = zipEntries(
-#             zipEntries(line_numbers_found, entropy_values),
-#             strings_found,
-#             False
-#         )
-#         entropic_diff['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
-#         entropic_diff['commitHash'] = prev_commit.hexsha
-#         entropic_diff['reason'] = "High Entropy"
-#         entropic_diff['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
-#         entropic_diff['hrSignature'] = file_hr_signature
-#         entropic_diff['fileSize'] = f"{file_size} bytes"
-#         return entropic_diff
-#
-#     return None
-
-
 def zipEntries(lines, strings, annotate=True):
     zipped = zip(lines, strings)
 
@@ -767,230 +687,11 @@ def zipEntries(lines, strings, annotate=True):
     return [f'{x}:{y}' for x, y in zipped]
 
 
-# def regex_check(args,
-#                 printable_diff,
-#                 commit_time,
-#                 branch_name,
-#                 prev_commit,
-#                 blob,
-#                 print_diff,
-#                 file_path,
-#                 file_hr_signature,
-#                 file_size,
-#                 custom_regexes=None,
-#                 elapsed_time=0):
-#
-#     if custom_regexes is None:
-#         custom_regexes = {}
-#
-#     strings_found = []
-#     line_numbers_found = []
-#     regex_matches = []
-#     secret_types_found = []
-#     found_diff = 'n/a'
-#
-#     if custom_regexes:
-#         secret_regexes = custom_regexes
-#     else:
-#         secret_regexes = args.regexes
-#
-#     curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
-#
-#     for index, line in enumerate(printable_diff.split("\n")):
-#         if line.startswith(prefix) or line.startswith(' '):  # always count empty
-#             # the next line in the hunk is the start of the 0 index
-#             curr_line = (original_start - index_correction) + index
-#
-#         for key in secret_regexes:
-#             found_strings = re.findall(secret_regexes[key], line)
-#             # if isinstance(found_strings, tuple):
-#             #     secret = mask(args.mask_secrets, ''.join(found_strings))
-#             # else:
-#             #     secret = mask(args.mask_secrets, found_string)
-#
-#             for found_string in found_strings:
-#                 if isinstance(found_string, tuple):
-#                     secret = mask(args.mask_secrets, ''.join(found_string))
-#                 else:
-#                     secret = mask(args.mask_secrets, line)
-#
-#                 found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
-#                 strings_found.append(secret)
-#                 secret_types_found.append(key)
-#                 # line_numbers_found.append(curr_line)
-#                 line_numbers_found.append('?')
-#
-#     start_time = time.time()
-#     end_time = time.time()  # bulk of ops end here, record it
-#     diff_elapsed_time = end_time - start_time
-#
-#     if len(strings_found) > 0:
-#         found_regex = {}
-#         _commit = prev_commit.message
-#         found_regex['date'] = commit_time
-#         found_regex['path'] = file_path
-#         found_regex['branch'] = branch_name
-#         found_regex['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
-#         # please rely on printDiff as that is masked
-#         # entropic_diff['diff'] = blob.diff.decode('utf-8', errors='replace')
-#         found_regex['linesFound'] = line_numbers_found  # lines where hits found
-#         # found_regex['linesFound'] = []
-#         found_regex['secretTypesFound'] = zipEntries(
-#             zipEntries(line_numbers_found, secret_types_found),
-#             strings_found,
-#             annotate=False
-#         )
-#         found_regex['detailedFound'] = zipEntries(line_numbers_found, strings_found)
-#         found_regex['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
-#         found_regex['commitHash'] = prev_commit.hexsha
-#         found_regex['reason'] = "Regex"
-#         found_regex['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
-#         found_regex['hrSignature'] = file_hr_signature
-#         found_regex['fileSize'] = f"{file_size} bytes"
-#         regex_matches.append(found_regex)
-#
-#     return regex_matches
-
-
-def analyze_diff_split(args,
-                       printable_diff,
-                       commit_time,
-                       branch_name,
-                       prev_commit,
-                       blob,
-                       file_path,
-                       print_diff,
-                       file_hr_signature,
-                       file_size,
-                       custom_regexes=None,
-                       elapsed_time=0,
-                       perform_entropy=True,
-                       perform_regex=False):
-    if custom_regexes is None:
-        custom_regexes = {}
-
-    entropy_results = {
-        'strings_found': [],
-        'line_numbers_found': [],
-        'entropy_values': [],
-    }
-
-    regex_results = {
-        'strings_found': [],
-        'line_numbers_found': [],
-        'secret_types_found': [],
-    }
-
-    found_diff = 'n/a'
-    threshold = args.length_threshold
-    curr_line, index_correction, original_start, original_count, prefix = 0, 0, 0, 0, ''
-    diffs = printable_diff.split("\n@@")  # Split by @@ to handle multiple diffs
-
-    for diff in diffs:
-        curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(diff)
-
-        for index, line in enumerate(diff.split("\n")):
-            if line.startswith(prefix) or line.startswith(' '):  # always count empty
-                # the next line in the hunk is the start of the 0 index
-                curr_line = (original_start - index_correction) + index
-
-            if perform_entropy:
-                for word in line.split():
-                    base64_strings = get_strings_of_set(word, SECRET_CHARSET, threshold)
-                    hex_strings = get_strings_of_set(word, HEX_CHARS, threshold)
-
-                    for string in base64_strings:
-                        entropy_value = shannon_entropy(string, SECRET_CHARSET)
-                        if entropy_value > args.entropy_threshold:
-                            secret = mask(args.mask_secrets, string)
-                            entropy_results['strings_found'].append(secret)
-                            entropy_results['entropy_values'].append(entropy_value)
-                            entropy_results['line_numbers_found'].append(curr_line)
-                            entropy_results['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
-                            printable_diff = printable_diff.replace(
-                                string,
-                                bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
-                            )
-
-                    for string in hex_strings:
-                        hex_entropy = shannon_entropy(string, HEX_CHARS)
-                        if hex_entropy > args.entropy_threshold_hex:
-                            secret = mask(args.mask_secrets, string)
-                            entropy_results['strings_found'].append(secret)
-                            entropy_results['entropy_values'].append(hex_entropy)
-                            entropy_results['line_numbers_found'].append(curr_line)
-                            entropy_results['printDiff'] = printable_diff if print_diff else "<diff-suppressed>"
-                            printable_diff = printable_diff.replace(
-                                string,
-                                bcolors.WARNING + mask(args.mask_secrets, string) + bcolors.ENDC
-                            )
-
-            if perform_regex:
-                for key in custom_regexes:
-                    found_strings = re.findall(custom_regexes[key], line)
-
-                    for found_string in found_strings:
-                        if isinstance(found_string, tuple):
-                            secret = mask(args.mask_secrets, ''.join(found_string))
-                        else:
-                            secret = mask(args.mask_secrets, line)
-
-                        found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
-                        regex_results['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
-                        regex_results['strings_found'].append(secret)
-                        regex_results['secret_types_found'].append(key)
-                        # regex_results['line_numbers_found'].append('?')
-                        regex_results['line_numbers_found'].append(curr_line)  # not correct...
-
-        start_time = time.time()
-        end_time = time.time()  # bulk of ops end here, record it
-        diff_elapsed_time = end_time - start_time
-
-    results = {}
-
-    if perform_entropy and len(entropy_results['strings_found']) > 0:
-        entropy_results['date'] = commit_time
-        entropy_results['path'] = file_path
-        entropy_results['branch'] = branch_name
-        entropy_results['commit'] = prev_commit.message[:120] + '..' if len(
-            prev_commit.message) > 120 else prev_commit.message
-        entropy_results['commitHash'] = prev_commit.hexsha
-        entropy_results['linesFound'] = entropy_results['line_numbers_found']
-        entropy_results['detailedFound'] = zipEntries(entropy_results['line_numbers_found'],
-                                                      entropy_results['strings_found'])
-        entropy_results['reason'] = "High Entropy"
-        entropy_results['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
-        entropy_results['hrSignature'] = file_hr_signature
-        entropy_results['fileSize'] = f"{file_size} bytes"
-        results['entropy'] = entropy_results
-
-    if perform_regex and len(regex_results['strings_found']) > 0:
-        regex_results['date'] = commit_time
-        regex_results['path'] = file_path
-        regex_results['branch'] = branch_name
-        regex_results['commit'] = prev_commit.message[:120] + '..' if len(
-            prev_commit.message) > 120 else prev_commit.message
-        regex_results['commitHash'] = prev_commit.hexsha
-        regex_results['linesFound'] = regex_results['line_numbers_found']
-        regex_results['secretTypesFound'] = zipEntries(
-            zipEntries(regex_results['line_numbers_found'], regex_results['secret_types_found']),
-            regex_results['strings_found'], annotate=False
-        )
-        regex_results['detailedFound'] = zipEntries(regex_results['line_numbers_found'], regex_results['strings_found'])
-        regex_results['reason'] = "Regex"
-        regex_results['elapsedTime'] = f"hr:{elapsed_time:.6f}, diff:{diff_elapsed_time:.10f} seconds"
-        regex_results['hrSignature'] = file_hr_signature
-        regex_results['fileSize'] = f"{file_size} bytes"
-        results['regex'] = regex_results
-
-    return results
-
-
 def analyze_diff(args,
                  printable_diff,
                  commit_time,
                  branch_name,
-                 prev_commit,
+                 commit,
                  blob,
                  file_path,
                  print_diff,
@@ -1018,9 +719,10 @@ def analyze_diff(args,
 
     found_diff = 'n/a'
     threshold = args.length_threshold
-    curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(printable_diff)
 
     for index, line in enumerate(printable_diff.split("\n")):
+        curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(line)
+
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
             # the next line in the hunk is the start of the 0 index
             curr_line = (original_start - index_correction) + index
@@ -1034,6 +736,7 @@ def analyze_diff(args,
                     entropy_value = shannon_entropy(string, SECRET_CHARSET)
                     if entropy_value > args.entropy_threshold:
                         secret = mask(args.mask_secrets, string)
+
                         entropy_results['strings_found'].append(secret)
                         entropy_results['entropy_values'].append(entropy_value)
                         entropy_results['line_numbers_found'].append(curr_line)
@@ -1070,8 +773,7 @@ def analyze_diff(args,
                     regex_results['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
                     regex_results['strings_found'].append(secret)
                     regex_results['secret_types_found'].append(key)
-                    # regex_results['line_numbers_found'].append('?')
-                    regex_results['line_numbers_found'].append(curr_line)  # not correct...
+                    regex_results['line_numbers_found'].append(curr_line)
 
     start_time = time.time()
     end_time = time.time()  # bulk of ops end here, record it
@@ -1083,8 +785,8 @@ def analyze_diff(args,
         entropy_results['date'] = commit_time
         entropy_results['path'] = file_path
         entropy_results['branch'] = branch_name
-        entropy_results['commit'] = prev_commit.message[:120] + '..' if len(prev_commit.message) > 120 else prev_commit.message
-        entropy_results['commitHash'] = prev_commit.hexsha
+        entropy_results['commit'] = commit.message[:120] + '..' if len(commit.message) > 120 else commit.message
+        entropy_results['commitHash'] = commit.hexsha
         entropy_results['linesFound'] = entropy_results['line_numbers_found']
         entropy_results['detailedFound'] = zipEntries(entropy_results['line_numbers_found'], entropy_results['strings_found'])
         entropy_results['reason'] = "High Entropy"
@@ -1097,8 +799,8 @@ def analyze_diff(args,
         regex_results['date'] = commit_time
         regex_results['path'] = file_path
         regex_results['branch'] = branch_name
-        regex_results['commit'] = prev_commit.message[:120] + '..' if len(prev_commit.message) > 120 else prev_commit.message
-        regex_results['commitHash'] = prev_commit.hexsha
+        regex_results['commit'] = commit.message[:120] + '..' if len(commit.message) > 120 else commit.message
+        regex_results['commitHash'] = commit.hexsha
         regex_results['linesFound'] = regex_results['line_numbers_found']
         regex_results['secretTypesFound'] = zipEntries(
             zipEntries(regex_results['line_numbers_found'], regex_results['secret_types_found']),
@@ -1136,6 +838,7 @@ def diff_worker(args,
     binary_hr_signature = 'n/a'
     hr_signature_str = 'n/a'
     file_size = 0
+    working_commit = None
 
     for blob in diff:
         found_issues = []
@@ -1160,8 +863,10 @@ def diff_worker(args,
                 with open(tmp_file_path, 'w') as tmp_file:
                     if blob.deleted_file:
                         tmp_file.write(repo_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
+                        working_commit = repo_commit
                     else:
                         tmp_file.write(repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
+                        working_commit = repo_curr_commit
 
                     tmp_file.flush()
 
@@ -1179,14 +884,14 @@ def diff_worker(args,
                     if not is_human_readable:
                         if args.show_hr_ignored_files:
                             entropic_diff = {}
-                            _commit = prev_commit.message
-                            commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
+                            commit_msg = working_commit.message
+                            commit_time = datetime.datetime.fromtimestamp(working_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
                             entropic_diff['date'] = commit_time
                             entropic_diff['path'] = file_path
                             entropic_diff['branch'] = branch_name
-                            entropic_diff['commit'] = (_commit[:120] + '..') if len(_commit) > 120 else _commit
+                            entropic_diff['commit'] = (commit_msg[:120] + '..') if len(commit_msg) > 120 else commit_msg
                             entropic_diff['printDiff'] = "<diff-suppressed>"
-                            entropic_diff['commitHash'] = prev_commit.hexsha
+                            entropic_diff['commitHash'] = working_commit.hexsha
                             entropic_diff['reason'] = "Ignored"
                             entropic_diff['hrSignature'] = hr_signature_str
                             entropic_diff['elapsedTime'] = f"hr:{elapsed_time:.6f} seconds"
@@ -1206,12 +911,24 @@ def diff_worker(args,
         for key in allow:
             printable_diff = allow[key].sub('', printable_diff)
 
-        commit_time = datetime.datetime.fromtimestamp(prev_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
+        commit_time = datetime.datetime.fromtimestamp(working_commit.committed_date).strftime('%Y-%m-%d %H:%M:%S')
 
         # Perform both entropy analysis and regex matching
-        results = analyze_diff(args, printable_diff, commit_time, branch_name, prev_commit, blob, file_path,
-                               print_diff, file_hr_signature, file_size, custom_regexes=custom_regexes,
-                               elapsed_time=elapsed_time, perform_entropy=do_entropy, perform_regex=do_regex)
+        results = analyze_diff(args=args,
+                               printable_diff=printable_diff,
+                               commit_time=commit_time,
+                               branch_name=branch_name,
+                               commit=working_commit,
+                               blob=blob,
+                               file_path=file_path,
+                               print_diff=print_diff,
+                               file_hr_signature=binary_hr_signature,
+                               file_size=file_size,
+                               custom_regexes=custom_regexes,
+                               elapsed_time=elapsed_time,
+                               perform_entropy=do_entropy,
+                               perform_regex=do_regex
+                               )
 
         entropic_diff = {}
         if 'entropy' in results.keys():

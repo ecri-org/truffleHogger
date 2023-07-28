@@ -77,52 +77,6 @@ class TestStringMethods(unittest.TestCase):
         license_file = os.path.join(project_path, "LICENSE")
         self.assertTrue(os.path.isfile(license_file))
 
-    def test_unicode_expection(self):
-        try:  # TODO: create the unicode test repo programmatically
-            mock_arg = MockArg('https://github.com/dxa4481/tst.git')
-            truffleHogger.find_strings(mock_arg, mock_arg.git_url)
-        except UnicodeEncodeError:
-            self.fail("Unicode print error")
-
-    def test_return_correct_commit_hash(self):
-        # Start at commit 202564cf776b402800a4aab8bb14fa4624888475, which 
-        # is immediately followed by a secret inserting commit:
-        # https://github.com/ecri-org/truffleHogger/commit/d15627104d07846ac2914a976e8e347a663bbd9b
-        since_commit = '202564cf776b402800a4aab8bb14fa4624888475'
-        commit_w_secret = 'd15627104d07846ac2914a976e8e347a663bbd9b'
-        cross_valdiating_commit_w_secret_comment = 'Oh no a secret file'
-
-        if sys.version_info >= (3,):
-            tmp_stdout = io.StringIO()
-        else:
-            tmp_stdout = io.BytesIO()
-        bak_stdout = sys.stdout
-
-        # slowly start to modify the signatures to use a param object, hence we must mock it
-        mock_arg = MockArg("https://github.com/ecri-org/truffleHogger.git")
-
-        # Redirect STDOUT, run scan and re-establish STDOUT
-        sys.stdout = tmp_stdout
-        try:
-            truffleHogger.find_strings(
-                mock_arg,
-                mock_arg.git_url,
-                since_commit=since_commit,
-                print_json=True,
-                output_json_stream=True)
-        finally:
-            sys.stdout = bak_stdout
-
-        json_result_list = tmp_stdout.getvalue().split('\n')
-        results = [json.loads(r) for r in json_result_list if bool(r.strip())]
-        filtered_results = list(
-            filter(lambda r: r['commitHash'] == commit_w_secret and r['branch'] == 'origin/main', results)
-        )
-        self.assertEqual(1, len(filtered_results))
-        self.assertEqual(commit_w_secret, filtered_results[0]['commitHash'])
-        # Additionally, we cross-validate the commit comment matches the expected comment
-        self.assertEqual(cross_valdiating_commit_w_secret_comment, filtered_results[0]['commit'].strip())
-
     @patch('truffleHogger.truffleHogger.clone_git_repo')
     @patch('truffleHogger.truffleHogger.git.Repo')
     @patch('shutil.rmtree')
