@@ -40,7 +40,7 @@ class MockArg:
 class TestStringMethods(unittest.TestCase):
     def test_regex(self):
         mock_arg = MockArg("test_repo")
-        regexes = truffleHogger.load_regexes(mock_arg)
+        regexes = truffleHogger.load_regex_file(mock_arg)
         # every one of these should match and if any did not, fail the test
         test_strings = [
             'sk_test_4eC39HqLyjWDarjtT1zdp7dc',

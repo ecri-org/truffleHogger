@@ -37,21 +37,38 @@ HEX_CHARS = "1234567890abcdefABCDEF"
 def process_pattern_list(paths, pattern_list=None, comment='#'):
     if pattern_list is None:
         pattern_list = []
+    #
+    # for pattern in set(line[:-1].lstrip() for line in paths):
+    #     if pattern and not pattern.startswith(comment):
+    #         pattern_list.append(pattern)
 
-    for pattern in set(line[:-1].lstrip() for line in paths):
-        if pattern and not pattern.startswith(comment):
-            pattern_list.append(re.compile(pattern))
+    pattern_list = load_pattern_dict(paths.items())
 
     return pattern_list
 
 
-def load_regexes(args, file_path="regexes.json"):
+def load_pattern_dict(items):
+    regexes = {}
+
+    for key, pattern in items:
+        regexes[key] = re.compile(pattern, re.IGNORECASE)
+
+    return regexes
+
+
+def load_regexes(file_obj):
+    regexes = {}
+
+    file = json.loads(file_obj.read())
+    regexes = load_pattern_dict(file.items())
+
+    return regexes
+
+def load_regex_file(args, file_path="regexes.json"):
     regexes = {}
 
     with open(os.path.join(os.path.dirname(__file__), file_path), 'r') as f:
-        file = json.loads(f.read())
-        for key, pattern in file.items():
-            regexes[key] = re.compile(pattern, re.IGNORECASE)
+        regexes = load_regexes(f)
 
     return regexes
 
@@ -404,7 +421,7 @@ def main():
                              'object path in order for it to be scanned; lines starting with "#" are treated as '
                              'comments and are ignored. If empty or not provided (default), all Git object paths are '
                              'included unless otherwise excluded via the --exclude_paths option.')
-    parser.add_argument('-x', '--exclude_paths', type=argparse.FileType('r'), metavar='EXCLUDE_PATHS_FILE',
+    parser.add_argument('-x', '--exclude_paths', type=str, metavar='EXCLUDE_PATHS_FILE',
                         help='File with regular expressions (one per line), none of which may match a Git object path '
                              'in order for it to be scanned; lines starting with "#" are treated as comments and are '
                              'ignored. If empty or not provided (default), no Git object paths are excluded unless '
@@ -456,7 +473,7 @@ def main():
 
     rules = allow = {}
     if args.do_regex:
-        args.regexes = load_regexes(args, "regexes.json")
+        args.regexes = load_regex_file(args, "regexes.json")
     if args.rules:  # when rules source regex from file, ignore ALL preset seeded rules
         rules = read_file_entries(args.rules, {})
         for regex in args.regexes.copy():
@@ -467,9 +484,9 @@ def main():
     if args.include_paths:
         path_inclusions = process_pattern_list(args.include_paths)
     if args.exclude_paths:
-        path_exclusions = process_pattern_list(args.exclude_paths)
+        path_exclusions = load_regex_file(args, args.exclude_paths)
     else:
-        path_exclusions = load_regexes(args, "ignore.json")
+        path_exclusions = load_regex_file(args, "ignore.json")
 
     display_info(args, path_inclusions, path_exclusions)
 
@@ -613,6 +630,7 @@ def print_results(args, issue, print_diff):
     else:
         file_size_str = f"{line_color_start}File size: n/a{line_color_end}"
 
+    secret_types_found_str = f"{line_color_start}Detailed line numbers: {secret_types_found}{line_color_end}"
     reason_str = f"{line_color_start}Reason: {reason}{line_color_end}"
     date_str = f"{line_color_start}Date: {commit_time}{line_color_end}"
     hash_str = f"{line_color_start}Hash: {commit_hash}{line_color_end}"
@@ -624,16 +642,11 @@ def print_results(args, issue, print_diff):
     else:
         detail_str = f"{line_color_start}Detailed lines numbers: {detailed_found}{line_color_end}"
 
-    if sys.version_info >= (3, 0):
-        branch_str = f"{line_color_start}Branch: {branch_name}{line_color_end}"
-        commit_str = f"{line_color_start}Commit message: {prev_commit}{line_color_end}".replace('\n', '')
-        diff = printable_diff if print_diff else '<suppressed>'
-        diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
-    else:
-        branch_str = f"{line_color_start}Branch: {branch_name.encode('utf-8')}{line_color_end}"
-        commit_str = f"{line_color_start}Commit: {prev_commit.encode('utf-8')}{line_color_end}".replace('\n', '')
-        diff = printable_diff.encode("utf-8") if print_diff else '<suppressed>'
-        diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
+
+    branch_str = f"{line_color_start}Branch: {branch_name}{line_color_end}"
+    commit_str = f"{line_color_start}Commit message: {prev_commit[0:65].rstrip().lstrip()}{line_color_end}".replace('\n', '')
+    diff = printable_diff if print_diff else '<suppressed>'
+    diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
     output = f'''
     {file_path_str}
@@ -645,8 +658,8 @@ def print_results(args, issue, print_diff):
         {hash_str}
         {branch_str}
         {lines_str}
-        {secret_types_found if reason == 'Regex' else detail_str}
-        {commit_str[0:65]}
+        {secret_types_found_str if reason == 'Regex' else detail_str}
+        {commit_str}
         {diff_str}
     '''
 
@@ -941,14 +954,6 @@ def diff_worker(args,
             found_regexes = results['regex']
             found_issues.append(found_regexes)
             count_regex += len(found_regexes)
-
-        # if entropic_diff:
-        #     found_issues.append(entropic_diff)
-        #     count_entropy += 1
-
-        # if len(found_regexes):
-        #     found_issues.append(found_regexes)
-        #     count_regex += len(found_regexes)
 
         # streaming
         for found_issue in found_issues:
