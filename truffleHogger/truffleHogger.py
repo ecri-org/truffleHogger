@@ -590,7 +590,7 @@ def print_results(args, issue, print_diff):
 
     commit_time = issue['date']
     branch_name = issue['branch']
-    prev_commit = issue['commit']
+    prev_commit = issue['commit'].rstrip().lstrip().replace('\r','').replace('\n','~')
     printable_diff = issue['printDiff']
     commit_hash = issue['commitHash']
     lines_found = issue['linesFound']
@@ -636,7 +636,7 @@ def print_results(args, issue, print_diff):
 
 
     branch_str = f"{line_color_start}Branch: {branch_name}{line_color_end}"
-    commit_str = f"{line_color_start}Commit message: {prev_commit[0:65].rstrip().lstrip()}{line_color_end}".replace('\n', '')
+    commit_str = f"{line_color_start}Commit message: {prev_commit}{line_color_end}"
     diff = printable_diff if print_diff else '<suppressed>'
     diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
