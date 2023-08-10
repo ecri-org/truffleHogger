@@ -865,6 +865,7 @@ def diff_worker(args,
 
         # from here on, we try and get file contents
         repo_commit = repo.commit(prev_commit)
+        working_commit = prev_commit
         repo_curr_commit = repo.commit(commitHash)
         elapsed_time = 0
 
