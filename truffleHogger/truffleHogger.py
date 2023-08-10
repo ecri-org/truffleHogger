@@ -37,10 +37,6 @@ HEX_CHARS = "1234567890abcdefABCDEF"
 def process_pattern_list(paths, pattern_list=None, comment='#'):
     if pattern_list is None:
         pattern_list = []
-    #
-    # for pattern in set(line[:-1].lstrip() for line in paths):
-    #     if pattern and not pattern.startswith(comment):
-    #         pattern_list.append(pattern)
 
     pattern_list = load_pattern_dict(paths.items())
 
@@ -416,16 +412,10 @@ def main():
     parser.add_argument("--max_line_length_threshold", dest="max_line_length",
                         help="The max line length to consider, anything longer than this must not be human readable (minified code)")
     parser.add_argument("--branch", dest="branch", help="Name of the branch to be scanned")
-    parser.add_argument('-i', '--include_paths', type=argparse.FileType('r'), metavar='INCLUDE_PATHS_FILE',
-                        help='File with regular expressions (one per line), at least one of which must match a Git '
-                             'object path in order for it to be scanned; lines starting with "#" are treated as '
-                             'comments and are ignored. If empty or not provided (default), all Git object paths are '
-                             'included unless otherwise excluded via the --exclude_paths option.')
+    parser.add_argument('-i', '--include_paths', type=str, metavar='INCLUDE_PATHS_FILE',
+                        help='JSON File with K:V entries, where the key is the description and value is a regex expression')
     parser.add_argument('-x', '--exclude_paths', type=str, metavar='EXCLUDE_PATHS_FILE',
-                        help='File with regular expressions (one per line), none of which may match a Git object path '
-                             'in order for it to be scanned; lines starting with "#" are treated as comments and are '
-                             'ignored. If empty or not provided (default), no Git object paths are excluded unless '
-                             'effectively excluded via the --include_paths option.')
+                        help='JSON File with K:V entries, where the key is the description and value is a regex expression')
     parser.add_argument("--repo_path", type=str, dest="repo_path",
                         help="Path to the cloned repo. If provided, git_url will not be used")
     parser.add_argument("--print-diff", dest="print_diff", action='store_true', help="Print the diff")
@@ -481,8 +471,10 @@ def main():
         args.regexes.update(rules)
     if args.allow:
         allow = read_file_entries(args.allow, {})
+
     if args.include_paths:
-        path_inclusions = process_pattern_list(args.include_paths)
+        path_inclusions = load_regex_file(args, args.include_paths)
+
     if args.exclude_paths:
         path_exclusions = load_regex_file(args, args.exclude_paths)
     else:
