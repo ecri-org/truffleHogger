@@ -126,6 +126,10 @@ def summary(args, output):
 
     if args.output_json:
         print(json.dumps(output, sort_keys=True))
+    else:
+        print ("Entropy Issues Found: ", output["countEntropy"])
+        print ("Regex Issues Found: ", output["countRegex"])
+        print ("Total Issues Found: ", output["countTotal"])
 
     exit_app(exit_code)
 
@@ -641,7 +645,7 @@ def print_results(args, issue, print_diff):
     diff_str = f'{line_color_start}Diff: {diff}{line_color_end}'
 
     output = f'''
-    {file_path_str}
+        {file_path_str}
         {file_size_str}
         {reason_str}
         {hr_signature_str}
@@ -725,12 +729,20 @@ def analyze_diff(args,
     found_diff = 'n/a'
     threshold = args.length_threshold
 
+    prefix = '-'
     for index, line in enumerate(printable_diff.split("\n")):
-        curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(line)
+        if (line.startswith('@@')):
+            countable_lines = 0
+            curr_line, index_correction, original_start, original_count, prefix = get_hunk_values(line)
 
         if line.startswith(prefix) or line.startswith(' '):  # always count empty
+            countable_lines += 1  # for the case when there are mixed blocks of additions and deletions we cannot just the index value
             # the next line in the hunk is the start of the 0 index
-            curr_line = (original_start - index_correction) + index
+            curr_line = (original_start - index_correction) + countable_lines
+
+        # Current line was not added in this diff, so skip to next line
+        if not line.startswith(prefix):
+            continue
 
         if perform_entropy:
             for word in line.split():
@@ -774,7 +786,7 @@ def analyze_diff(args,
                     else:
                         secret = mask(args.mask_secrets, line)
 
-                    found_diff = printable_diff.replace(printable_diff, bcolors.WARNING + secret + bcolors.ENDC)
+                    found_diff = printable_diff.replace(found_string, bcolors.WARNING + secret + bcolors.ENDC)
                     regex_results['printDiff'] = found_diff if print_diff else "<diff-suppressed>"
                     regex_results['strings_found'].append(secret)
                     regex_results['secret_types_found'].append(key)
@@ -869,10 +881,10 @@ def diff_worker(args,
                 with open(tmp_file_path, 'w') as tmp_file:
                     if blob.deleted_file:
                         tmp_file.write(repo_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
-                        working_commit = repo_commit
+                        #  working_commit = repo_commit
                     else:
                         tmp_file.write(repo_curr_commit.tree[file_path].data_stream.read().decode('utf-8', errors='replace'))
-                        working_commit = repo_curr_commit
+                        #  working_commit = repo_curr_commit
 
                     tmp_file.flush()
 
